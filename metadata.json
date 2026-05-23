@@ -1,0 +1,10 @@
+{
+  "name": "Mimic",
+  "description": "Android-native motion capture application that records human body movement and exports it to BVH.",
+  "requestFramePermissions": [
+    "android.permission.CAMERA"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
