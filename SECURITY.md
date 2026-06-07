@@ -29,4 +29,5 @@ We take all security reports seriously and will endeavor to respond to your repo
   * API keys must be managed securely via local environment variables (e.g., via the AI Studio Secrets panel or a local `.env` file). 
   * **Never** hardcode your API keys directly into the source code or commit them to version control.
 * **Local Storage**: Exported Motion Capture files (such as BVH files) are stored locally in the device's storage. Users should ensure their devices utilize standard Android-level encryption and secure lock screens to protect exported data.
-* **External Transmissions**: No video feeds or raw tracking data are transmitted to unverified third-party servers. Network transmissions are strictly limited to the configured AI API endpoints.
+* **External Transmissions**: No video feeds or raw tracking data are transmitted to unverified third-party servers. All processing is strictly local to the device using the ML Kit Pose Detection API, allowing the app to be completely air-gapped during capture.
+* **API Integrations**: The Gemini API integration is optional and only used for specific analytical tasks if configured out-of-band.
