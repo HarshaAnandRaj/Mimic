@@ -12,14 +12,17 @@ Mimic is an Android-native motion capture application that records human body mo
 *   **Universal Timecode Injection:** Injects absolute UTC Epoch Timestamps into every frame for perfect sync with external facial mocap (e.g., iPhone ARKit).
 *   **Heuristic Foot-Contact Flags:** Calculates ankle velocity and vertical position to inject tiny boolean flags into the data, acting as triggers for IK lock in Blender.
 *   **Dynamic Velocity Clamping:** A biomechanical constraint that caps impossible frame-by-frame joint accelerations to smooth out motion blur spikes.
-*   **Long-Distance Telemetry UX:** Emits hardware audio beeps during calibration states and uses the device's LED flashlight as a strobe to warn the user if tracking is lost.
+*   **Long-Distance Telemetry UX:** Emits hardware audio beeps during calibration states, accompanied by a high-visibility neon screen flash indicator for clear 10-foot visual feedback.
+*   **Bone Length Isolation (Distance Cage):** Locks limb proportions based on the T-pose calibration to prevent perspective distortion shrinking/stretching by enforcing physical distance limits along the calculated vectors.
+*   **Anatomical Hinge Clamping:** Hard biological rule enforcement via dot-product analysis to prevent impossible backward bends in hinge joints like elbows and knees.
+*   **Absolute Floor Penetration Guard:** Dynamically locks vertical axis thresholds based on ground floor ankle states during calibration to forbid any tracking coordinate from sinking "underground".
+*   **Kalman Filter Temporal Smoothing:** An aerospace-grade predictive algorithm that out-performs simple EMA by balancing measurement confidence and projected velocity to eliminate jitter without inducing tracker lag.
+*   **Occlusion Fallback (Dead-Reckoning):** A safety algorithm triggered by drops in tracking confidence that intuitively interpolates hidden joints (like occluded wrists) to natural resting positions instead of allowing them to clip inside the chest cavity.
 
 ## 🔜 Yet to be Added (Planned Features)
 
 While the core tracking and privacy architecture is complete, the following advanced engine features are actively under development:
 
-*   **Rule 1: Bone Length Isolation (Distance Cage):** Locking limb proportions based on the T-pose calibration to prevent perspective distortion shrinking/stretching.
-*   **Rule 2: Rotational Clamping (Axis Box):** Hard anatomical limits (Euler angles) on hinge joints (elbows/knees) to prevent backward bending.
 *   **Subject Locking (ROI Photobomb Rejector):** Bounding box isolation to prevent the tracker from snapping to background individuals during a session.
 *   **Probabilistic Preflight & Quality Swapping:** Dynamically shifting the camera resolution between 1080p and 480p based on thermal and memory survival indexing.
 *   **Flat Binary `.raw` Streams:** Transitioning from the current JSON scratch files to a zero-object-allocation sequential binary scratch stream to bypass the Java Garbage Collector entirely.

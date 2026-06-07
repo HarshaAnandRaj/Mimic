@@ -22,10 +22,11 @@ The on-device mobile pipeline runs entirely decoupled across distinct processing
        │
        ▼
 [ Biomechanical Constraint Layer ] 
-       │  • Rule 1: Spatial Grid Hook (Mid-Hip Origin Allocation)
-       │  • Rule 2: Distance Cage (Proportion Length Lock)
-       │  • Rule 3: Axis Box (Anatomical Angular Clamping)
+       │  • Rule 1: Distance Cage (Proportion Length Lock)
+       │  • Rule 2: Axis Box (Anatomical Angular Clamping)
+       │  • Rule 3: Floor Penetration Guard (Gravity Anchor)
        │  • Rule 4: Dynamic Velocity Cage (Motion Blur Shutter Ceiling)
+       │  • Rule 5: Kalman Tracking (Predictive State Estimation)
        │
        ▼
 [ Memory Bounded Cache Stream ]  ──► Reusable FloatArray ➔ Raw Sequential Binary Local Disk Cache
@@ -67,7 +68,7 @@ The application operates as a deterministic finite state machine to minimize com
 
 ## 4. The Gauntlet of Constraints (The Invisible Cages)
 
-To turn unstable, probabilistic AI tracking points into natural human motion, the data passes through four strict geometric rules before it is compiled into an animation file:
+To turn unstable, probabilistic AI tracking points into natural human motion, the data passes through strict geometric and mathematical rules before it is compiled into an animation file:
 
 ### Rule 1: Bone Length Isolation (The Distance Cage)
 
@@ -75,11 +76,19 @@ During calibration, specific bone lengths (e.g., Shoulder-to-Elbow, Hip-to-Knee)
 
 ### Rule 2: Rotational Clamping (The Axis Box)
 
-Human joints move within set biological boundaries. The engine calculates local rotations and converts them to Euler angles. For hinge joints (elbows and knees), the application applies hard limits (e.g., preventing an elbow from bending backward past $175^\circ$). If tracking data drops, the joint slams into the wall of the invisible box and stops, resulting in a clean, biologically plausible pose instead of an impossible digital distortion.
+Human joints move within set biological boundaries. The engine calculates local rotations and vectors. For hinge joints (elbows and knees), the application applies hard limits (e.g., preventing a knee from bending forward or an elbow backward). A dot-product projection algorithm detects if the tracked shin or forearm points opposite its anatomical plane and projects it back, resulting in a clean, biologically plausible pose.
 
-### Rule 3: Dynamic Velocity Clamping (The Blur Ceiling)
+### Rule 3: Floor Penetration Guard
 
-To handle motion blur, the engine calculates the angular velocity of each joint frame-by-frame. Human joints have a hard physical acceleration limit per millisecond. If a blurred frame causes an tracking coordinate to jump wildly (implying an anatomically impossible speed), the velocity gate intercepts the value, truncates the change to the maximum allowable human limit, and smoothly glides the bone along its previous trajectory.
+The application uses the hardware gravity sensor to define an absolute floor plane based on the anchor positions (ankles/heels) captured during the T-pose calibration. If chaotic AI tracking guesses a foot has sunk below this plane, the vertical axis is hard-clamped, preventing the character from ever sinking underground.
+
+### Rule 4: Dynamic Velocity Clamping (The Blur Ceiling)
+
+Human joints have a hard physical acceleration limit. If a blurred frame causes a tracking coordinate to jump wildly (implying an anatomically impossible speed), the velocity gate intercepts the value, truncates the displacement to the maximum allowable human limit, and smoothly glides the bone along its restricted trajectory.
+
+### Rule 5: Kalman Filtering (Predictive Smoothing)
+
+Instead of a trailing Exponential Moving Average (EMA) that introduces lag, the app uses an aerospace-grade Kalman Filter per joint axis. This predicts the next position based on physical velocity, dynamically weighing its own prediction against the ML Kit confidence output tracking. When tracking fails briefly, the engine safely relies on velocity prediction (Dead Reckoning) to glide joints organically until visual confidence is restored.
 
 ---
 
