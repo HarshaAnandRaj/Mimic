@@ -68,6 +68,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
@@ -87,22 +88,25 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.core.content.FileProvider
 import com.example.ui.theme.MyApplicationTheme
-import com.google.accompanist.permissions.ExperimentalPermissionsApi
-import com.google.accompanist.permissions.isGranted
-import com.google.accompanist.permissions.rememberPermissionState
 import com.google.mlkit.vision.pose.Pose
 import com.google.mlkit.vision.pose.PoseLandmark
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.ui.graphics.nativeCanvas
 import java.io.File
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        
+        com.google.android.gms.ads.MobileAds.initialize(this) {}
+        
         enableEdgeToEdge()
         setContent {
             MyApplicationTheme {
@@ -116,135 +120,156 @@ enum class AppScreen { Capture, Library, Analytics, Playback, Privacy }
 
 enum class TrackingState { SEARCHING, CALIBRATING, READY, RECORDING, LOSS }
 
-@OptIn(ExperimentalPermissionsApi::class)
 @Composable
 fun MoCapApp() {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("mocap_prefs", android.content.Context.MODE_PRIVATE) }
     var privacyAccepted by remember { mutableStateOf(prefs.getBoolean("privacy_accepted", false)) }
     
-    val cameraPermissionState = rememberPermissionState(permission = Manifest.permission.CAMERA)
+    var hasCameraPermission by remember { 
+        mutableStateOf(
+            androidx.core.content.ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) 
+    }
+    var hasAudioPermission by remember { 
+        mutableStateOf(
+            androidx.core.content.ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) 
+    }
+    val allPermissionsGranted = hasCameraPermission && hasAudioPermission
+    
+    val permissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        hasCameraPermission = permissions[Manifest.permission.CAMERA] ?: hasCameraPermission
+        hasAudioPermission = permissions[Manifest.permission.RECORD_AUDIO] ?: hasAudioPermission
+    }
+    
     var currentScreen by remember { mutableStateOf(if (privacyAccepted) AppScreen.Capture else AppScreen.Privacy) }
     var fileToPlay by remember { mutableStateOf<java.io.File?>(null) }
 
     var isRecordingSession by remember { mutableStateOf(false) }
 
-    LaunchedEffect(privacyAccepted) {
-        if (privacyAccepted && !cameraPermissionState.status.isGranted) {
-            cameraPermissionState.launchPermissionRequest()
-        }
-    }
+    val bgDark = androidx.compose.material3.MaterialTheme.colorScheme.background
+    val textLight = androidx.compose.material3.MaterialTheme.colorScheme.onBackground
+    val accentBlue = androidx.compose.material3.MaterialTheme.colorScheme.primary
 
-    val bgDark = Color(0xFF1A1C1E)
-    val textLight = Color(0xFFE2E2E6)
-    val accentBlue = Color(0xFFD0E4FF)
+    val drawerState = androidx.compose.material3.rememberDrawerState(initialValue = androidx.compose.material3.DrawerValue.Closed)
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
 
-    Scaffold(
-        modifier = Modifier.fillMaxSize(),
-        bottomBar = {
-            if (privacyAccepted && cameraPermissionState.status.isGranted && 
-                currentScreen != AppScreen.Privacy && currentScreen != AppScreen.Playback && !isRecordingSession) {
-                NavigationBar(
-                    containerColor = bgDark,
-                    contentColor = textLight,
-                    tonalElevation = 8.dp
+    androidx.compose.material3.ModalNavigationDrawer(
+        drawerState = drawerState,
+        gesturesEnabled = privacyAccepted && allPermissionsGranted && currentScreen != AppScreen.Privacy && currentScreen != AppScreen.Playback && !isRecordingSession,
+        drawerContent = {
+            if (privacyAccepted && allPermissionsGranted && currentScreen != AppScreen.Privacy && currentScreen != AppScreen.Playback) {
+                androidx.compose.material3.ModalDrawerSheet(
+                    drawerContainerColor = bgDark,
+                    drawerContentColor = textLight
                 ) {
-                    NavigationBarItem(
-                        selected = currentScreen == AppScreen.Capture,
-                        onClick = { currentScreen = AppScreen.Capture },
-                        icon = { Icon(Icons.Default.FiberManualRecord, contentDescription = "Capture") },
-                        label = { Text("Capture") },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = bgDark,
-                            selectedTextColor = accentBlue,
-                            indicatorColor = accentBlue,
-                            unselectedIconColor = textLight.copy(alpha = 0.5f),
-                            unselectedTextColor = textLight.copy(alpha = 0.5f)
+                    Spacer(Modifier.height(16.dp))
+                    Text("Mimic PRO Menu", modifier = Modifier.padding(16.dp), color = accentBlue, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    
+                    var showUserManual by remember { mutableStateOf(false) }
+                    if (showUserManual) {
+                        androidx.compose.material3.AlertDialog(
+                            onDismissRequest = { showUserManual = false },
+                            title = { Text("User Manual", color = textLight) },
+                            text = { 
+                                Column(modifier = Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState())) {
+                                    Text("Mock Engine User Manual", fontWeight = FontWeight.Bold, color = textLight)
+                                    Spacer(Modifier.height(8.dp))
+                                    Text("1. Getting Started:\nEnsure your entire body is visible within the camera frame for Body Tracking, or your face is well-lit for Face Tracking.", color = textLight.copy(alpha = 0.8f))
+                                    Spacer(Modifier.height(8.dp))
+                                    Text("2. Calibration:\nStep back until the app says 'READY'. Then, assume a T-Pose for 1.5 seconds. The indicator ring will pulse yellow then turn green.", color = textLight.copy(alpha = 0.8f))
+                                    Spacer(Modifier.height(8.dp))
+                                    Text("3. Recording:\nPress the red record button, or trigger it by holding an 'X' shape with your arms crossed over your chest for 2 seconds. Press the button again or repeat the 'X' pose to stop.", color = textLight.copy(alpha = 0.8f))
+                                    Spacer(Modifier.height(8.dp))
+                                    Text("4. Ghost Mode:\nUse the eye icon in the top right to disable video rendering. When active, no video feed is visible or processed for maximum performance and privacy.", color = textLight.copy(alpha = 0.8f))
+                                }
+                            },
+                            confirmButton = {
+                                TextButton(onClick = { showUserManual = false }) {
+                                    Text("Close", color = accentBlue)
+                                }
+                            },
+                            containerColor = Color.Black.copy(alpha = 0.4f)
                         )
-                    )
-                    NavigationBarItem(
-                        selected = currentScreen == AppScreen.Library,
-                        onClick = { currentScreen = AppScreen.Library },
-                        icon = { Icon(Icons.Default.Folder, contentDescription = "Library") },
-                        label = { Text("Library") },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = bgDark,
-                            selectedTextColor = accentBlue,
-                            indicatorColor = accentBlue,
-                            unselectedIconColor = textLight.copy(alpha = 0.5f),
-                            unselectedTextColor = textLight.copy(alpha = 0.5f)
-                        )
-                    )
-                    NavigationBarItem(
-                        selected = currentScreen == AppScreen.Analytics,
-                        onClick = { currentScreen = AppScreen.Analytics },
-                        icon = { Icon(Icons.Default.BarChart, contentDescription = "Analytics") },
-                        label = { Text("Analytics") },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = bgDark,
-                            selectedTextColor = accentBlue,
-                            indicatorColor = accentBlue,
-                            unselectedIconColor = textLight.copy(alpha = 0.5f),
-                            unselectedTextColor = textLight.copy(alpha = 0.5f)
+                    }
+
+                    androidx.compose.material3.NavigationDrawerItem(
+                        label = { Text("User Manual", color = textLight) },
+                        selected = false,
+                        onClick = { showUserManual = true; scope.launch { drawerState.close() } },
+                        icon = { Icon(Icons.Default.Info, contentDescription = "User Manual", tint = textLight.copy(alpha = 0.7f)) },
+                        colors = androidx.compose.material3.NavigationDrawerItemDefaults.colors(
+                            selectedContainerColor = accentBlue.copy(alpha = 0.2f),
+                            unselectedContainerColor = Color.Transparent
                         )
                     )
                 }
             }
         }
-    ) { innerPadding ->
-        if (!privacyAccepted || currentScreen == AppScreen.Privacy) {
-            PrivacyScreen(
-                modifier = Modifier.padding(innerPadding),
-                onAccept = {
-                    prefs.edit().putBoolean("privacy_accepted", true).apply()
-                    privacyAccepted = true
-                    currentScreen = AppScreen.Capture
-                }
-            )
-        } else if (cameraPermissionState.status.isGranted) {
-            when (currentScreen) {
-                AppScreen.Capture -> MoCapScreen(
+    ) {
+        Scaffold(
+            modifier = Modifier.fillMaxSize()
+        ) { innerPadding ->
+            if (!privacyAccepted || currentScreen == AppScreen.Privacy) {
+                PrivacyScreen(
                     modifier = Modifier.padding(innerPadding),
-                    onNavigate = { currentScreen = it },
-                    onRecordingStateChange = { isRecordingSession = it }
-                )
-                AppScreen.Library -> LibraryScreen(
-                    modifier = Modifier.padding(innerPadding),
-                    onNavigate = { currentScreen = it },
-                    onPlay = { 
-                        fileToPlay = it 
-                        currentScreen = AppScreen.Playback 
+                    onAccept = {
+                        prefs.edit().putBoolean("privacy_accepted", true).apply()
+                        privacyAccepted = true
+                        currentScreen = AppScreen.Capture
                     }
                 )
-                AppScreen.Analytics -> AnalyticsScreen(
-                    modifier = Modifier.padding(innerPadding),
-                    onNavigate = { currentScreen = it }
-                )
-                AppScreen.Playback -> {
-                    if (fileToPlay != null) {
-                        PlaybackScreen(
-                            modifier = Modifier.padding(innerPadding),
-                            file = fileToPlay!!,
-                            onNavigateBack = { currentScreen = AppScreen.Library }
-                        )
-                    } else {
-                        currentScreen = AppScreen.Library
+            } else if (allPermissionsGranted) {
+                when (currentScreen) {
+                    AppScreen.Capture -> MoCapScreen(
+                        modifier = Modifier.padding(innerPadding),
+                        onNavigate = { currentScreen = it },
+                        onRecordingStateChange = { isRecordingSession = it },
+                        onOpenDrawer = { scope.launch { drawerState.open() } }
+                    )
+                    AppScreen.Library -> LibraryScreen(
+                        modifier = Modifier.padding(innerPadding),
+                        onNavigate = { currentScreen = it },
+                        onNavigateBack = { currentScreen = AppScreen.Capture },
+                        onPlay = { 
+                            fileToPlay = it 
+                            currentScreen = AppScreen.Playback 
+                        }
+                    )
+                    AppScreen.Analytics -> AnalyticsScreen(
+                        modifier = Modifier.padding(innerPadding),
+                        onNavigate = { currentScreen = it },
+                        onNavigateBack = { currentScreen = AppScreen.Capture }
+                    )
+                    AppScreen.Playback -> {
+                        if (fileToPlay != null) {
+                            PlaybackScreen(
+                                modifier = Modifier.padding(innerPadding),
+                                file = fileToPlay!!,
+                                onNavigateBack = { currentScreen = AppScreen.Library }
+                            )
+                        } else {
+                            currentScreen = AppScreen.Library
+                        }
+                    }
+                    AppScreen.Privacy -> {
+                        // Handled above, but required for exhaustiveness
                     }
                 }
-                AppScreen.Privacy -> {
-                    // Handled above, but required for exhaustiveness
-                }
-            }
-        } else {
-            Box(
-                modifier = Modifier.fillMaxSize().padding(innerPadding),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("Camera permission is required.", color = Color.White)
-                    Spacer(modifier = Modifier.height(16.dp))
-                    androidx.compose.material3.Button(onClick = { cameraPermissionState.launchPermissionRequest() }) {
-                        Text("Grant Permission")
+            } else {
+                Box(
+                    modifier = Modifier.fillMaxSize().padding(innerPadding),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("Camera and Audio permissions are required.", color = Color.White)
+                        Spacer(modifier = Modifier.height(16.dp))
+                        androidx.compose.material3.Button(onClick = { permissionLauncher.launch(arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)) }) {
+                            Text("Grant Permissions")
+                        }
                     }
                 }
             }
@@ -254,9 +279,11 @@ fun MoCapApp() {
 
 
 @Composable
-fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, onRecordingStateChange: (Boolean) -> Unit = {}) {
+fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, onRecordingStateChange: (Boolean) -> Unit = {}, onOpenDrawer: () -> Unit = {}) {
     val context = LocalContext.current
     var currentPose by remember { mutableStateOf<Pose?>(null) }
+    var currentFaceMesh by remember { mutableStateOf<com.google.mlkit.vision.facemesh.FaceMesh?>(null) }
+    var trackingMode by remember { mutableStateOf(TrackingMode.BODY) }
     var imageWidth by remember { mutableStateOf(0) }
     var imageHeight by remember { mutableStateOf(0) }
     
@@ -287,12 +314,32 @@ fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, 
     }
     
     // Telemetry & Hardware Setup
-    val toneGenerator = remember { ToneGenerator(AudioManager.STREAM_NOTIFICATION, 100) }
+    val toneGenerator = remember {
+        try {
+            ToneGenerator(AudioManager.STREAM_NOTIFICATION, 100)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
     var latestGravity by remember { mutableStateOf(floatArrayOf(0f, 9.8f, 0f)) }
     var isFlashActive by remember { mutableStateOf(false) }
     var isGhostMode by remember { mutableStateOf(false) }
     var isFrontCamera by remember { mutableStateOf(false) }
-    var showPrivacyInfo by remember { mutableStateOf(false) }
+    
+    val activity = LocalContext.current as? android.app.Activity
+    LaunchedEffect(isGhostMode) {
+        activity?.let {
+            val window = it.window
+            val layoutParams = window.attributes
+            if (isGhostMode) {
+                layoutParams.screenBrightness = 0.01f
+            } else {
+                layoutParams.screenBrightness = android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+            }
+            window.attributes = layoutParams
+        }
+    }
     
     LaunchedEffect(trackingState, isRecording) {
         if (trackingState == TrackingState.LOSS && isRecording) {
@@ -321,7 +368,7 @@ fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, 
         sensorManager.registerListener(listener, gravitySensor, SensorManager.SENSOR_DELAY_UI)
         onDispose {
             sensorManager.unregisterListener(listener)
-            toneGenerator.release()
+            toneGenerator?.release()
         }
     }
     
@@ -329,20 +376,33 @@ fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, 
         val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
         var thermalListener: PowerManager.OnThermalStatusChangedListener? = null
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            thermalListener = PowerManager.OnThermalStatusChangedListener { status ->
-                isOverheating = status >= PowerManager.THERMAL_STATUS_SEVERE
+            try {
+                thermalListener = PowerManager.OnThermalStatusChangedListener { status ->
+                    isOverheating = status >= PowerManager.THERMAL_STATUS_SEVERE
+                }
+                powerManager.addThermalStatusListener(androidx.core.content.ContextCompat.getMainExecutor(context), thermalListener)
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
-            powerManager.addThermalStatusListener(thermalListener)
         }
         onDispose {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && thermalListener != null) {
-                powerManager.removeThermalStatusListener(thermalListener)
+                try {
+                    powerManager.removeThermalStatusListener(thermalListener)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
             }
         }
     }
     
     val haptic = LocalHapticFeedback.current
     val recorder = remember { PoseRecorder(context) }
+    val faceRecorder = remember { 
+        val fr = FaceRecorder(context)
+        fr.audioAnalyzer = AudioVisemeAnalyzer()
+        fr
+    }
 
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
@@ -350,10 +410,10 @@ fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, 
             if (event == Lifecycle.Event.ON_PAUSE || event == Lifecycle.Event.ON_STOP) {
                 if (isRecording) {
                     isRecording = false
-                    val file = recorder.stopRecording()
+                    val file = if (trackingMode == TrackingMode.BODY) recorder.stopRecording() else faceRecorder.stopRecording()
                     lastSavedFile = file
                     currentDuration = 0L
-                    showQualityScore = recorder.lastSessionStats
+                    showQualityScore = if (trackingMode == TrackingMode.BODY) recorder.lastSessionStats else null
                 }
             }
         }
@@ -393,16 +453,20 @@ fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, 
     
     LaunchedEffect(countdownTimer) {
         if (countdownTimer > 0) {
-            toneGenerator.startTone(ToneGenerator.TONE_CDMA_PIP, 150)
+            toneGenerator?.startTone(ToneGenerator.TONE_CDMA_PIP, 150)
             kotlinx.coroutines.delay(1000)
             countdownTimer--
             if (countdownTimer == 0) {
-                toneGenerator.startTone(ToneGenerator.TONE_CDMA_ABBR_ALERT, 500)
+                toneGenerator?.startTone(ToneGenerator.TONE_CDMA_ABBR_ALERT, 500)
                 lastSavedFile = null
                 frameCount = 0
                 bufferSize = 0
-                recorder.setDeviceGravity(latestGravity)
-                recorder.startRecording()
+                if (trackingMode == TrackingMode.BODY) {
+                    recorder.setDeviceGravity(latestGravity)
+                    recorder.startRecording()
+                } else {
+                    faceRecorder.startRecording()
+                }
                 isRecording = true
                 trackingState = TrackingState.RECORDING
             }
@@ -412,15 +476,16 @@ fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, 
     DisposableEffect(Unit) {
         onDispose {
             if (recorder.isRecording()) recorder.stopRecording()
+            if (faceRecorder.isRecording()) faceRecorder.stopRecording()
         }
     }
 
-    val bgDark = Color(0xFF0D0D0D)
-    val textLight = Color(0xFFE2E2E6)
-    val accentBlue = Color(0xFF00E5FF) // accentCyan
-    val recordRed = Color(0xFFFF1744)
-    val panelBg = Color(0xFF2D2F31)
-    val btnBg = Color(0xFF3D4758)
+    val bgDark = androidx.compose.material3.MaterialTheme.colorScheme.background
+    val textLight = androidx.compose.material3.MaterialTheme.colorScheme.onBackground
+    val accentBlue = androidx.compose.material3.MaterialTheme.colorScheme.primary
+    val recordRed = androidx.compose.material3.MaterialTheme.colorScheme.secondary
+    val panelBg = Color.Black.copy(alpha = 0.4f)
+    val btnBg = Color.White.copy(alpha = 0.1f)
 
     Column(modifier = modifier.fillMaxSize().background(bgDark)) {
         // Top App Bar
@@ -431,6 +496,10 @@ fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, 
                 .padding(horizontal = 16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            IconButton(onClick = onOpenDrawer) {
+                Icon(Icons.Default.Menu, contentDescription = "Menu", tint = accentBlue)
+            }
+            Spacer(modifier = Modifier.width(4.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = "Mimic",
@@ -449,6 +518,49 @@ fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, 
                         text = "PRO",
                         color = accentBlue,
                         fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+            
+            Spacer(modifier = Modifier.weight(1f))
+            
+            // Mode Toggle
+            Row(
+                modifier = Modifier
+                    .background(Color.White.copy(alpha = 0.1f), RoundedCornerShape(20.dp))
+                    .padding(4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .background(
+                            if (trackingMode == TrackingMode.BODY) textLight else Color.Transparent,
+                            RoundedCornerShape(16.dp)
+                        )
+                        .clickable { if (!isRecording) { haptic.performHapticFeedback(HapticFeedbackType.LongPress); trackingMode = TrackingMode.BODY } }
+                        .padding(horizontal = 14.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        "BODY",
+                        color = if (trackingMode == TrackingMode.BODY) bgDark else textLight.copy(alpha = 0.6f),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .background(
+                            if (trackingMode == TrackingMode.FACE) textLight else Color.Transparent,
+                            RoundedCornerShape(16.dp)
+                        )
+                        .clickable { if (!isRecording) { haptic.performHapticFeedback(HapticFeedbackType.LongPress); trackingMode = TrackingMode.FACE } }
+                        .padding(horizontal = 14.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        "FACE",
+                        color = if (trackingMode == TrackingMode.FACE) bgDark else textLight.copy(alpha = 0.6f),
+                        fontSize = 12.sp,
                         fontWeight = FontWeight.Bold
                     )
                 }
@@ -489,25 +601,92 @@ fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, 
                 .drawWithContent {
                     drawContent()
                     val stroke = trackerStroke
-                    val bracketLength = 32.dp.toPx()
-                    // Top-Left
-                    drawLine(trackerColor, start = Offset(0f, 0f), end = Offset(bracketLength, 0f), strokeWidth = stroke)
-                    drawLine(trackerColor, start = Offset(0f, 0f), end = Offset(0f, bracketLength), strokeWidth = stroke)
-                    // Top-Right
-                    drawLine(trackerColor, start = Offset(this.size.width, 0f), end = Offset(this.size.width - bracketLength, 0f), strokeWidth = stroke)
-                    drawLine(trackerColor, start = Offset(this.size.width, 0f), end = Offset(this.size.width, bracketLength), strokeWidth = stroke)
-                    // Bottom-Left
-                    drawLine(trackerColor, start = Offset(0f, this.size.height), end = Offset(bracketLength, this.size.height), strokeWidth = stroke)
-                    drawLine(trackerColor, start = Offset(0f, this.size.height), end = Offset(0f, this.size.height - bracketLength), strokeWidth = stroke)
-                    // Bottom-Right
-                    drawLine(trackerColor, start = Offset(this.size.width, this.size.height), end = Offset(this.size.width - bracketLength, this.size.height), strokeWidth = stroke)
-                    drawLine(trackerColor, start = Offset(this.size.width, this.size.height), end = Offset(this.size.width, this.size.height - bracketLength), strokeWidth = stroke)
+                    
+                    if (trackingMode == TrackingMode.FACE) {
+                        val ovalWidth = size.width * 0.6f
+                        val ovalHeight = size.height * 0.5f
+                        val ovalLeft = (size.width - ovalWidth) / 2f
+                        val ovalTop = (size.height - ovalHeight) / 2f
+                        drawOval(
+                            color = trackerColor,
+                            topLeft = Offset(ovalLeft, ovalTop),
+                            size = androidx.compose.ui.geometry.Size(ovalWidth, ovalHeight),
+                            style = androidx.compose.ui.graphics.drawscope.Stroke(width = stroke)
+                        )
+                    } else {
+                        val bracketLength = 32.dp.toPx()
+                        // Top-Left
+                        drawLine(trackerColor, start = Offset(0f, 0f), end = Offset(bracketLength, 0f), strokeWidth = stroke)
+                        drawLine(trackerColor, start = Offset(0f, 0f), end = Offset(0f, bracketLength), strokeWidth = stroke)
+                        // Top-Right
+                        drawLine(trackerColor, start = Offset(this.size.width, 0f), end = Offset(this.size.width - bracketLength, 0f), strokeWidth = stroke)
+                        drawLine(trackerColor, start = Offset(this.size.width, 0f), end = Offset(this.size.width, bracketLength), strokeWidth = stroke)
+                        // Bottom-Left
+                        drawLine(trackerColor, start = Offset(0f, this.size.height), end = Offset(bracketLength, this.size.height), strokeWidth = stroke)
+                        drawLine(trackerColor, start = Offset(0f, this.size.height), end = Offset(0f, this.size.height - bracketLength), strokeWidth = stroke)
+                        // Bottom-Right
+                        drawLine(trackerColor, start = Offset(this.size.width, this.size.height), end = Offset(this.size.width - bracketLength, this.size.height), strokeWidth = stroke)
+                        drawLine(trackerColor, start = Offset(this.size.width, this.size.height), end = Offset(this.size.width, this.size.height - bracketLength), strokeWidth = stroke)
+                    }
                 }
         ) {
-            CameraPreviewAndAnalysis(
-                isFlashActive = isFlashActive,
-                isGhostMode = isGhostMode,
-                isFrontCamera = isFrontCamera,
+            val view = androidx.compose.ui.platform.LocalView.current
+            var hasWindowFocus by remember { mutableStateOf(view.hasWindowFocus()) }
+            DisposableEffect(view) {
+                val listener = android.view.ViewTreeObserver.OnWindowFocusChangeListener { focus ->
+                    hasWindowFocus = focus
+                }
+                view.viewTreeObserver.addOnWindowFocusChangeListener(listener)
+                onDispose {
+                    view.viewTreeObserver.removeOnWindowFocusChangeListener(listener)
+                }
+            }
+            
+            val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+            var isResumed by remember { mutableStateOf(lifecycleOwner.lifecycle.currentState == androidx.lifecycle.Lifecycle.State.RESUMED) }
+            DisposableEffect(lifecycleOwner) {
+                val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+                    isResumed = event.targetState == androidx.lifecycle.Lifecycle.State.RESUMED
+                }
+                lifecycleOwner.lifecycle.addObserver(observer)
+                onDispose {
+                    lifecycleOwner.lifecycle.removeObserver(observer)
+                }
+            }
+
+            var isReadyToStartCamera by remember { mutableStateOf(false) }
+            LaunchedEffect(hasWindowFocus, isResumed) { 
+                if (hasWindowFocus && isResumed) {
+                    kotlinx.coroutines.delay(500) // Give Android time to flush AppOps states
+                    isReadyToStartCamera = true
+                } else {
+                    isReadyToStartCamera = false
+                }
+            }
+
+            if (isReadyToStartCamera) {
+                CameraPreviewAndAnalysis(
+                    trackingMode = trackingMode,
+                    isFlashActive = isFlashActive,
+                    isGhostMode = isGhostMode,
+                    isFrontCamera = isFrontCamera,
+                isOverheating = isOverheating,
+                onFaceDetected = { face, w, h ->
+                    currentFaceMesh = face
+                    imageWidth = w
+                    imageHeight = h
+                    
+                    trackingConfidence = 0.99f // Face mode is always highly confident if detected
+                    
+                    if (isRecording) {
+                        faceRecorder.recordFrame(face)
+                        frameCount++
+                        bufferSize = faceRecorder.getBufferLength()
+                        trackingState = TrackingState.RECORDING
+                    } else {
+                        trackingState = TrackingState.READY
+                    }
+                },
                 onPoseDetected = { pose, w, h ->
                     currentPose = pose
                     imageWidth = w
@@ -530,7 +709,7 @@ fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, 
                                 lWrist.position.y < lShoulder.position.y + 100f) {
                                 if (xGestureTime == 0L) xGestureTime = System.currentTimeMillis()
                                 else if (System.currentTimeMillis() - xGestureTime > 2000) {
-                                    toneGenerator.startTone(ToneGenerator.TONE_CDMA_ABBR_ALERT, 500)
+                                    toneGenerator?.startTone(ToneGenerator.TONE_CDMA_ABBR_ALERT, 500)
                                     isRecording = false
                                     trackingState = TrackingState.SEARCHING
                                     val file = recorder.stopRecording()
@@ -553,7 +732,7 @@ fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, 
                             trackingState = TrackingState.RECORDING // reusing an enum value? Wait, we didn't add RECORDING
                         } else {
                             if (trackingState != TrackingState.LOSS) {
-                                toneGenerator.startTone(ToneGenerator.TONE_CDMA_ABBR_ALERT, 300)
+                                toneGenerator?.startTone(ToneGenerator.TONE_CDMA_ABBR_ALERT, 300)
                             }
                             trackingState = TrackingState.LOSS
                         }
@@ -568,7 +747,7 @@ fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, 
                                 } else if (isTPose) {
                                     trackingState = TrackingState.CALIBRATING
                                     calibrationTime = System.currentTimeMillis()
-                                    toneGenerator.startTone(ToneGenerator.TONE_CDMA_EMERGENCY_RINGBACK, 200)
+                                    toneGenerator?.startTone(ToneGenerator.TONE_CDMA_EMERGENCY_RINGBACK, 200)
                                 }
                             }
                             TrackingState.CALIBRATING -> {
@@ -576,7 +755,7 @@ fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, 
                                     trackingState = TrackingState.READY
                                 } else {
                                     if (System.currentTimeMillis() - calibrationTime > 1500) {
-                                        toneGenerator.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 500)
+                                        toneGenerator?.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 500)
                                         recorder.calibrate(pose)
                                         trackingState = TrackingState.READY
                                         triggerFlash = true
@@ -590,6 +769,7 @@ fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, 
                     }
                 }
             )
+            }
 
             if (isGhostMode) {
                 Text(
@@ -602,11 +782,19 @@ fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, 
                 )
             }
 
-            PoseOverlay(
-                pose = currentPose,
-                imageWidth = imageWidth,
-                imageHeight = imageHeight
-            )
+            if (trackingMode == TrackingMode.BODY) {
+                PoseOverlay(
+                    pose = currentPose,
+                    imageWidth = imageWidth,
+                    imageHeight = imageHeight
+                )
+            } else {
+                FaceOverlay(
+                    faceMesh = currentFaceMesh,
+                    imageWidth = imageWidth,
+                    imageHeight = imageHeight
+                )
+            }
 
             if (showQualityScore != null) {
                 val stats = showQualityScore!!
@@ -694,26 +882,75 @@ fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, 
 
             // HUD Overlays
             Box(modifier = Modifier.fillMaxSize()) {
+                // Top Left HUD
+                Column(modifier = Modifier.padding(16.dp).align(Alignment.TopStart)) {
+                    androidx.compose.animation.AnimatedVisibility(visible = isRecording) {
+                        val seconds = (currentDuration / 1000) % 60
+                        val minutes = (currentDuration / 1000) / 60
+                        Row(
+                            modifier = Modifier
+                                .background(recordRed.copy(alpha = 0.8f), RoundedCornerShape(8.dp))
+                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(modifier = Modifier.size(8.dp).background(Color.White, CircleShape))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(String.format("%02d:%02d", minutes, seconds), color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    
+                    // Warnings
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = isLowStorage,
+                        enter = androidx.compose.animation.slideInVertically(initialOffsetY = { -it }) + androidx.compose.animation.fadeIn(),
+                        exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { -it }) + androidx.compose.animation.fadeOut()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .padding(top = 8.dp)
+                                .background(Color.Red.copy(alpha = 0.8f), RoundedCornerShape(8.dp))
+                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Default.Warning, contentDescription = "Warning", tint = Color.White, modifier = Modifier.size(12.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("STORAGE", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = isOverheating,
+                        enter = androidx.compose.animation.slideInVertically(initialOffsetY = { -it }) + androidx.compose.animation.fadeIn(),
+                        exit = androidx.compose.animation.slideOutVertically(targetOffsetY = { -it }) + androidx.compose.animation.fadeOut()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .padding(top = 8.dp)
+                                .background(Color(0xFFFF9800).copy(alpha = 0.9f), RoundedCornerShape(8.dp))
+                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Default.Warning, contentDescription = "Overheating", tint = Color.Black, modifier = Modifier.size(12.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("HOT", color = Color.Black, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+
                 // Top Right Settings
                 Row(
-                    modifier = Modifier.align(Alignment.TopEnd).padding(24.dp),
+                    modifier = Modifier.align(Alignment.TopEnd).padding(16.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     androidx.compose.material3.IconButton(
-                        onClick = { showPrivacyInfo = true },
-                        modifier = Modifier.background(bgDark, CircleShape)
-                    ) {
-                        Icon(imageVector = Icons.Default.Info, contentDescription = "Privacy Info", tint = Color.White)
-                    }
-                    Spacer(modifier = Modifier.width(12.dp))
-                    androidx.compose.material3.IconButton(
                         onClick = { isGhostMode = !isGhostMode },
-                        modifier = Modifier.background(if(isGhostMode) Color.Green else bgDark, CircleShape)
+                        modifier = Modifier.size(40.dp).background(if(isGhostMode) Color.Green else Color.Black.copy(alpha = 0.5f), CircleShape)
                     ) {
                         Icon(
                             imageVector = if(isGhostMode) Icons.Default.VisibilityOff else Icons.Default.Visibility, 
                             contentDescription = "Ghost Mode", 
-                            tint = if (isGhostMode) Color.Black else Color.White
+                            tint = if (isGhostMode) Color.Black else Color.White,
+                            modifier = Modifier.size(20.dp)
                         )
                     }
                 }
@@ -728,219 +965,83 @@ fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, 
                     )
                 }
 
-                Column(modifier = Modifier.padding(24.dp)) {
-                // Tracking Status & Confidence Meter
-                Row(
+                // Bottom Left HUD
+                val memoryNum = remember { mutableStateOf(140) }
+                LaunchedEffect(Unit) {
+                    while(true) {
+                        memoryNum.value = 140 + (Math.random() * 20).toInt()
+                        kotlinx.coroutines.delay(2000)
+                    }
+                }
+
+                Column(
                     modifier = Modifier
-                        .background(Color.White.copy(alpha = 0.1f), RoundedCornerShape(12.dp))
-                        .border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(12.dp))
-                        .padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                        .align(Alignment.BottomStart)
+                        .padding(16.dp)
+                        .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
                 ) {
-                    val confidenceColor = when {
-                        trackingConfidence > 0.75f -> Color.Green
-                        trackingConfidence > 0.4f -> Color.Yellow
-                        else -> Color.Red
-                    }
-                    val confidenceText = when {
-                        trackingConfidence > 0.75f -> "STABLE"
-                        trackingConfidence > 0.4f -> "SHAKY"
-                        else -> "POOR"
-                    }
-                    Column {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(modifier = Modifier.size(8.dp).background(confidenceColor, CircleShape))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "TRACKING: $confidenceText",
-                                color = textLight,
-                                fontSize = 11.sp,
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = FontWeight.Bold,
-                                letterSpacing = 1.sp
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text = "CONFIDENCE",
-                                color = textLight.copy(alpha = 0.7f),
-                                fontSize = 9.sp,
-                                fontFamily = FontFamily.Monospace
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Box(modifier = Modifier.width(60.dp).height(4.dp).background(Color.DarkGray)) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxHeight()
-                                        .fillMaxWidth(trackingConfidence)
-                                        .background(confidenceColor)
-                                )
-                            }
-                        }
-                    }
+                    Text(
+                        text = "FRAME: ${String.format("%06d", frameCount)}",
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "BUFFER: ${String.format("%06d", bufferSize)}",
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 10.sp,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "MEM: ${memoryNum.value}MB | TEMP: 38°C",
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 10.sp,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                    )
                 }
-                Spacer(modifier = Modifier.height(8.dp))
-                
-                if (isRecording) {
-                    val seconds = (currentDuration / 1000) % 60
-                    val minutes = (currentDuration / 1000) / 60
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier
-                            .background(Color.White.copy(alpha = 0.1f), RoundedCornerShape(12.dp))
-                            .border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(12.dp))
-                            .padding(horizontal = 16.dp, vertical = 8.dp)
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(modifier = Modifier.size(6.dp).background(recordRed, CircleShape))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "REC",
-                                color = textLight.copy(alpha = 0.6f),
-                                fontSize = 10.sp,
-                                fontFamily = FontFamily.Monospace,
-                                letterSpacing = 2.sp
-                            )
-                        }
-                        Text(
-                            text = String.format("%02d:%02d", minutes, seconds),
-                            color = Color.White,
-                            fontSize = 36.sp,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 2.sp
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier
-                            .background(Color.Black.copy(alpha = 0.4f), CircleShape)
-                            .border(1.dp, Color.White.copy(alpha = 0.1f), CircleShape)
-                            .padding(horizontal = 12.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(modifier = Modifier.size(8.dp).background(Color.Green, CircleShape))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "LIVE: MediaPipe",
-                            color = textLight,
-                            fontSize = 11.sp,
-                            fontFamily = FontFamily.Monospace,
-                            letterSpacing = 1.sp
-                        )
-                    }
-                }
-                
-                if (isLowStorage) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier
-                            .background(Color.Red.copy(alpha = 0.8f), RoundedCornerShape(8.dp))
-                            .border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(8.dp))
-                            .padding(horizontal = 12.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(imageVector = Icons.Default.Warning, contentDescription = "Warning", tint = Color.White, modifier = Modifier.size(14.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "LOW STORAGE (< 500MB)",
-                            color = Color.White,
-                            fontSize = 11.sp,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
-                
-                if (isOverheating) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier
-                            .background(Color(0xFFFF9800).copy(alpha = 0.9f), RoundedCornerShape(8.dp))
-                            .border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(8.dp))
-                            .padding(horizontal = 12.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(imageVector = Icons.Default.Warning, contentDescription = "Overheating", tint = Color.Black, modifier = Modifier.size(14.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "THERMAL THROTTLING",
-                            color = Color.Black,
-                            fontSize = 11.sp,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
-            }
-            
-            Column(
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .padding(24.dp)
-            ) {
-                Text(
-                    text = "FRAME",
-                    color = textLight.copy(alpha=0.5f),
-                    fontSize = 10.sp,
-                    fontFamily = FontFamily.Monospace
-                )
-                Text(
-                    text = String.format("%06d", frameCount),
-                    color = Color.White,
-                    fontSize = 28.sp,
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Bold
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "BUFFER: ${String.format("%06d", bufferSize)} | EXP: BVH (READY)",
-                    color = Color.White.copy(alpha = 0.6f),
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 10.sp
-                )
-             }
-             
-             // Confidence
-             Box(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(24.dp)
-                    .background(accentBlue, RoundedCornerShape(8.dp))
-                    .padding(horizontal = 12.dp, vertical = 6.dp)
-             ) {
-                Text(
-                    text = "CONF: ${if (currentPose != null) "98.2%" else "--"}",
-                    color = bgDark,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold
-                )
-             }
             } // Close HUD Overlays Box
         }
 
         // Bottom Control Panel
         Column(modifier = Modifier.padding(24.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+            Box(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
             ) {
-                // Secondary Action Left (Flip Camera)
+                // Secondary Action Left (Library Shortcut)
                 IconButton(
-                    onClick = { isFrontCamera = !isFrontCamera },
-                    modifier = Modifier.size(56.dp).background(btnBg, RoundedCornerShape(16.dp))
+                    onClick = { onNavigate(AppScreen.Library) },
+                    modifier = Modifier.size(56.dp).background(btnBg, RoundedCornerShape(16.dp)).align(Alignment.CenterStart)
                 ) {
-                    Icon(imageVector = Icons.Default.FlipCameraAndroid, contentDescription = "Flip", tint = textLight)
+                    Icon(imageVector = Icons.Default.Folder, contentDescription = "Library", tint = textLight)
                 }
 
                 // Main Record Button
+                val buttonShape by androidx.compose.animation.core.animateFloatAsState(
+                    targetValue = if (isRecording) 16f else 50f, 
+                    animationSpec = androidx.compose.animation.core.spring(dampingRatio = 0.6f, stiffness = 400f),
+                    label = "buttonShape"
+                )
+                val buttonSize by androidx.compose.animation.core.animateFloatAsState(
+                    targetValue = if (isRecording) 36f else 72f,
+                    animationSpec = androidx.compose.animation.core.spring(dampingRatio = 0.6f, stiffness = 400f),
+                    label = "buttonSize"
+                )
+                val glowRadius by androidx.compose.animation.core.animateFloatAsState(
+                    targetValue = if (isRecording) 24f else 0f,
+                    animationSpec = androidx.compose.animation.core.tween(500),
+                    label = "glow"
+                )
+                
                 Box(
                     modifier = Modifier
                         .size(80.dp)
                         .border(4.dp, if (isRecording) recordRed else btnBg, CircleShape)
                         .padding(4.dp)
+                        .align(Alignment.Center)
                         .clickable {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             if (isRecording) {
@@ -948,82 +1049,66 @@ fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, 
                                 trackingState = TrackingState.SEARCHING
                                 lastSavedFile = recorder.stopRecording()
                                 showQualityScore = recorder.lastSessionStats
-                            } else if (countdownTimer == 0) {
+                            } else if (countdownTimer > 0) {
+                                countdownTimer = 0 // Cancel countdown
+                            } else {
                                 countdownTimer = 5 // Start countdown
                             }
                         },
                     contentAlignment = Alignment.Center
                 ) {
-                    val buttonShape by androidx.compose.animation.core.animateFloatAsState(targetValue = if (isRecording) 16f else 50f, label = "buttonShape")
-                    val buttonSize by androidx.compose.animation.core.animateFloatAsState(targetValue = if (isRecording) 32f else 72f, label = "buttonSize")
                     Box(modifier = Modifier
                         .size(buttonSize.dp)
+                        .drawBehind {
+                            if (glowRadius > 0f) {
+                                val w = this.size.width
+                                val h = this.size.height
+                                drawContext.canvas.nativeCanvas.apply {
+                                    drawRoundRect(
+                                        0f, 0f, w, h,
+                                        w * (buttonShape / 100f), w * (buttonShape / 100f),
+                                        android.graphics.Paint().apply {
+                                            color = android.graphics.Color.TRANSPARENT
+                                            setShadowLayer(glowRadius, 0f, 0f, android.graphics.Color.parseColor("#FF2A55"))
+                                        }
+                                    )
+                                }
+                            }
+                        }
                         .background(recordRed, androidx.compose.foundation.shape.RoundedCornerShape(percent = buttonShape.toInt()))
                     )
                 }
 
-                // Secondary Action Right (Share)
-                IconButton(
-                    onClick = { 
-                        if (lastSavedFile != null && !isRecording) {
-                            showExportDialog = lastSavedFile
-                        }
-                    },
-                    modifier = Modifier.size(56.dp).background(if (lastSavedFile != null && !isRecording) btnBg else btnBg.copy(alpha=0.5f), RoundedCornerShape(16.dp))
-                ) {
-                    Icon(imageVector = Icons.Default.Share, contentDescription = "Share", tint = if (lastSavedFile != null && !isRecording) textLight else textLight.copy(alpha=0.5f))
+                // Secondary Action Right (Confidence)
+                val confidenceColor = when {
+                    trackingConfidence > 0.75f -> Color(0xFF4ADE80)
+                    trackingConfidence > 0.4f -> Color(0xFFFBBF24)
+                    else -> Color(0xFFF87171)
                 }
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // Quick Stats
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Column(
-                    modifier = Modifier.weight(1f).background(panelBg, RoundedCornerShape(16.dp)).border(1.dp, Color.White.copy(alpha=0.05f), RoundedCornerShape(16.dp)).padding(16.dp)
+                Box(
+                    modifier = Modifier
+                        .size(56.dp)
+                        .background(btnBg, RoundedCornerShape(16.dp))
+                        .align(Alignment.CenterEnd),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Text("PIPELINE", color = Color.White.copy(alpha=0.5f), fontSize = 10.sp, letterSpacing = 1.sp)
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(modifier = Modifier.size(6.dp).background(Color(0xFF60A5FA), CircleShape))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Android → Blender", color = textLight, fontSize = 14.sp)
-                    }
-                }
-                androidx.compose.foundation.layout.Column(
-                    modifier = Modifier.weight(1f).background(panelBg, androidx.compose.foundation.shape.RoundedCornerShape(16.dp)).border(1.dp, Color.White.copy(alpha=0.05f), androidx.compose.foundation.shape.RoundedCornerShape(16.dp)).padding(16.dp)
-                ) {
-                    Text("THERMAL STATUS", color = Color.White.copy(alpha=0.5f), fontSize = 10.sp, letterSpacing = 1.sp)
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(modifier = Modifier.size(6.dp).background(Color.Green, CircleShape))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Stable (38°C)", color = textLight, fontSize = 14.sp)
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = "${(trackingConfidence * 100).toInt()}%",
+                            color = confidenceColor,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "CONF",
+                            color = textLight.copy(alpha = 0.6f),
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold
+                        )
                     }
                 }
             }
-        }
-        
-        if (showPrivacyInfo) {
-            androidx.compose.material3.AlertDialog(
-                onDismissRequest = { showPrivacyInfo = false },
-                title = { Text("Zero-Cloud Privacy Policy", color = textLight) },
-                text = { 
-                    Column {
-                        Text("This application is an Intelligent Mock Engine built for VTubers and animators.", color = textLight.copy(alpha = 0.8f))
-                        Spacer(Modifier.height(8.dp))
-                        Text("• Zero Video Capture: Ghost Mode disables the camera preview entirely. No MP4s are saved to your device.", color = textLight.copy(alpha = 0.8f))
-                        Text("• Air-Gapped Architecture: This app does not have internet permissions. All ML processing happens locally in RAM.", color = textLight.copy(alpha = 0.8f))
-                        Text("• Sandboxed Storage: Mocap tracking streams are written securely to the app's internal cache.", color = textLight.copy(alpha = 0.8f))
-                    }
-                },
-                confirmButton = {
-                    androidx.compose.material3.TextButton(onClick = { showPrivacyInfo = false }) {
-                        Text("Got it", color = accentBlue)
-                    }
-                },
-                containerColor = panelBg
-            )
         }
         
         if (showExportDialog != null) {
@@ -1041,11 +1126,17 @@ fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, 
                     }
                 },
                 dismissButton = {
-                    androidx.compose.material3.TextButton(onClick = {
-                        shareMocapFile(context, fileToShare, "bvh")
-                        showExportDialog = null
-                    }) {
-                        Text("BVH", color = accentBlue)
+                    if (trackingMode == TrackingMode.BODY) {
+                        androidx.compose.material3.TextButton(onClick = {
+                            shareMocapFile(context, fileToShare, "bvh")
+                            showExportDialog = null
+                        }) {
+                            Text("BVH", color = accentBlue)
+                        }
+                    } else {
+                        androidx.compose.material3.TextButton(onClick = { showExportDialog = null }) {
+                            Text("Cancel", color = textLight)
+                        }
                     }
                 },
                 containerColor = panelBg

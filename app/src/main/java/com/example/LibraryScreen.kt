@@ -13,6 +13,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -33,13 +34,13 @@ import java.util.*
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LibraryScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, onPlay: (File) -> Unit = {}) {
+fun LibraryScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, onNavigateBack: () -> Unit = {}, onPlay: (File) -> Unit = {}) {
     val context = LocalContext.current
-    val bgDark = Color(0xFF1A1C1E)
-    val textLight = Color(0xFFE2E2E6)
-    val accentBlue = Color(0xFFD0E4FF)
-    val panelBg = Color(0xFF2D2F31)
-    val btnBg = Color(0xFF3D4758)
+    val bgDark = androidx.compose.material3.MaterialTheme.colorScheme.background
+    val textLight = androidx.compose.material3.MaterialTheme.colorScheme.onBackground
+    val accentBlue = androidx.compose.material3.MaterialTheme.colorScheme.primary
+    val panelBg = androidx.compose.material3.MaterialTheme.colorScheme.surface
+    val btnBg = androidx.compose.material3.MaterialTheme.colorScheme.surfaceVariant
 
     val downloadsDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
     var files by remember { mutableStateOf(downloadsDir?.listFiles()?.toList()?.filter { it.extension == "json" || it.extension == "bvh" }?.sortedByDescending { it.lastModified() } ?: emptyList()) }
@@ -48,6 +49,7 @@ fun LibraryScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit
     var newName by remember { mutableStateOf("") }
     
     var showExportDialog by remember { mutableStateOf<File?>(null) }
+    var isExporting by remember { mutableStateOf(false) }
     
     val refreshFiles = {
         files = downloadsDir?.listFiles()?.toList()?.filter { it.extension == "json" || it.extension == "bvh" }?.sortedByDescending { it.lastModified() } ?: emptyList()
@@ -103,26 +105,62 @@ fun LibraryScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit
 
     if (showExportDialog != null) {
         val fileToShare = showExportDialog!!
+        var isFaceTracking = false
+        try {
+            val reader = java.io.FileReader(fileToShare)
+            val chars = CharArray(500)
+            val readChars = reader.read(chars)
+            reader.close()
+            if (readChars > 0) {
+                val header = String(chars, 0, readChars)
+                if (header.contains("\"tracking_mode\":\"FACE\"")) {
+                    isFaceTracking = true
+                }
+            }
+        } catch(e: Exception) {}
+        
         AlertDialog(
             onDismissRequest = { showExportDialog = null },
             title = { Text("Export Format", color = textLight) },
             text = { Text("Choose the format you want to export:", color = textLight.copy(alpha = 0.8f)) },
             confirmButton = {
                 TextButton(onClick = {
-                    shareMocapFile(context, fileToShare, "json")
+                    shareMocapFile(context, fileToShare, "json", onStart = { isExporting = true }, onComplete = { isExporting = false })
                     showExportDialog = null
                 }) {
                     Text("JSON", color = accentBlue)
                 }
             },
             dismissButton = {
-                TextButton(onClick = {
-                    shareMocapFile(context, fileToShare, "bvh")
-                    showExportDialog = null
-                }) {
-                    Text("BVH (Beta)", color = accentBlue)
+                if (!isFaceTracking) {
+                    TextButton(onClick = {
+                        shareMocapFile(context, fileToShare, "bvh", onStart = { isExporting = true }, onComplete = { isExporting = false })
+                        showExportDialog = null
+                    }) {
+                        Text("BVH (Beta)", color = accentBlue)
+                    }
+                } else {
+                    TextButton(onClick = { showExportDialog = null }) {
+                        Text("Cancel", color = textLight)
+                    }
                 }
             },
+            containerColor = panelBg
+        )
+    }
+
+    if (isExporting) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("Exporting...", color = textLight) },
+            text = { 
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(color = accentBlue, modifier = Modifier.size(24.dp))
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Text("Processing MoCap data, please wait...", color = textLight.copy(alpha = 0.8f))
+                }
+            },
+            confirmButton = {},
             containerColor = panelBg
         )
     }
@@ -137,13 +175,19 @@ fun LibraryScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Text(
-                text = "Library",
-                color = textLight,
-                fontSize = 24.sp,
-                fontWeight = FontWeight.SemiBold,
-                letterSpacing = (-0.5).sp
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onNavigateBack) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = textLight)
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Library",
+                    color = textLight,
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    letterSpacing = (-0.5).sp
+                )
+            }
             IconButton(onClick = refreshFiles) {
                 Icon(imageVector = Icons.Default.Refresh, contentDescription = "Refresh", tint = textLight)
             }
@@ -203,22 +247,48 @@ fun FileItem(
     val sdf = SimpleDateFormat("MMM dd, yyyy HH:mm", Locale.getDefault())
     val date = sdf.format(Date(file.lastModified()))
     val sizeKb = file.length() / 1024
+    
+    var isFaceTracking by remember { mutableStateOf(false) }
+    LaunchedEffect(file) {
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                val reader = java.io.FileReader(file)
+                val chars = CharArray(500)
+                val readChars = reader.read(chars)
+                reader.close()
+                if (readChars > 0) {
+                    val header = String(chars, 0, readChars)
+                    if (header.contains("\"tracking_mode\":\"FACE\"")) {
+                        isFaceTracking = true
+                    }
+                }
+            } catch(e: Exception) {}
+        }
+    }
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
             .background(panelBg)
-            .border(1.dp, Color.White.copy(alpha = 0.05f), RoundedCornerShape(16.dp))
+            .border(
+                androidx.compose.foundation.BorderStroke(1.dp, androidx.compose.ui.graphics.Brush.linearGradient(listOf(Color.White.copy(alpha=0.2f), Color.White.copy(alpha=0.02f)))),
+                RoundedCornerShape(16.dp)
+            )
             .clickable { onPlay(file) }
             .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(
-            modifier = Modifier.size(40.dp).background(Color(0xFF60A5FA).copy(alpha = 0.2f), RoundedCornerShape(8.dp)),
+            modifier = Modifier.size(44.dp).background(if (isFaceTracking) Color(0xFFFF2A55).copy(alpha=0.15f) else accentBlue.copy(alpha=0.15f), RoundedCornerShape(12.dp)),
             contentAlignment = Alignment.Center
         ) {
-            Icon(imageVector = Icons.AutoMirrored.Filled.InsertDriveFile, contentDescription = null, tint = accentBlue)
+            Icon(
+                imageVector = if (isFaceTracking) Icons.Default.Face else Icons.Default.Accessibility, 
+                contentDescription = null, 
+                tint = if (isFaceTracking) Color(0xFFFF2A55) else accentBlue,
+                modifier = Modifier.size(24.dp)
+            )
         }
         Spacer(modifier = Modifier.width(16.dp))
         Column(modifier = Modifier.weight(1f)) {

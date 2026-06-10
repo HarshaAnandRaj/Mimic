@@ -4,6 +4,7 @@ import android.os.Environment
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Analytics
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.FiberManualRecord
@@ -26,7 +27,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 
 @Composable
-fun AnalyticsScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit) {
+fun AnalyticsScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, onNavigateBack: () -> Unit = {}) {
     val context = LocalContext.current
     val bgDark = Color(0xFF1A1C1E)
     val textLight = Color(0xFFE2E2E6)
@@ -48,6 +49,10 @@ fun AnalyticsScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Un
                 .padding(horizontal = 16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            androidx.compose.material3.IconButton(onClick = onNavigateBack) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = textLight)
+            }
+            Spacer(modifier = Modifier.width(8.dp))
             Text(
                 text = "Analytics",
                 color = textLight,

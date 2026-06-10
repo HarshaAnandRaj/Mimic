@@ -20,10 +20,11 @@ class PoseRecorder(private val context: Context) {
     private var frameCount = 0
     private var startTimeMillis: Long = 0
 
-    private var previousLandmarks = mutableMapOf<Int, FloatArray>()
+    private var previousLandmarks = Array(33) { FloatArray(3) }
+    private var previousLandmarksValid = BooleanArray(33)
     private var deviceGravity: FloatArray? = null
     
-    private var writer: BufferedWriter? = null
+    private var jsonWriter: android.util.JsonWriter? = null
     private var currentFile: File? = null
     private var totalConf = 0f
     private var lowConfFrames = 0
@@ -34,6 +35,8 @@ class PoseRecorder(private val context: Context) {
     private var lastFrameTime: Long = 0
     private var wristOccludedFrames = mutableMapOf<Int, Int>()
     
+    private val tempMeasures = FloatArray(3)
+
     private val bonePairs = listOf(
         Pair(11, 13), Pair(13, 15), // Left arm
         Pair(12, 14), Pair(14, 16), // Right arm
@@ -44,9 +47,11 @@ class PoseRecorder(private val context: Context) {
     )
     private val calibratedBoneLengths = mutableMapOf<Pair<Int, Int>, Float>()
     private var floorPlaneY = Float.MIN_VALUE
+    private var calibratedTPoseJson: org.json.JSONArray? = null
 
     fun calibrate(pose: Pose) {
         val positions = mutableMapOf<Int, FloatArray>()
+        calibratedTPoseJson = org.json.JSONArray()
         pose.allPoseLandmarks.forEach { landmark ->
             val id = landmark.landmarkType
             if (id >= 33) return@forEach
@@ -61,6 +66,14 @@ class PoseRecorder(private val context: Context) {
             } catch (e: Exception) {}
             
             positions[id] = floatArrayOf(posX, posY, posZ)
+            
+            val lmJson = org.json.JSONObject()
+            lmJson.put("id", id)
+            lmJson.put("x", posX)
+            lmJson.put("y", posY)
+            lmJson.put("z", posZ)
+            lmJson.put("visibility", landmark.inFrameLikelihood)
+            calibratedTPoseJson?.put(lmJson)
             
             // Floor plane analysis. 
             // In MLKit, Y is downwards, so the floor is the maximum Y value.
@@ -92,7 +105,7 @@ class PoseRecorder(private val context: Context) {
         frameCount = 0
         totalConf = 0f
         lowConfFrames = 0
-        previousLandmarks.clear()
+        previousLandmarksValid.fill(false)
         kalmanStates = Array(33) { Array(3) { KalmanState() } }
         wristOccludedFrames.clear()
         lastFrameTime = System.currentTimeMillis()
@@ -103,26 +116,46 @@ class PoseRecorder(private val context: Context) {
             if (dir?.exists() == false) dir.mkdirs()
             currentFile = File(dir, filename)
             
-            writer = currentFile?.bufferedWriter()
-            writer?.write("[\n")
+            jsonWriter = android.util.JsonWriter(currentFile?.bufferedWriter())
+            jsonWriter?.beginArray()
             
             // Metadata frame
-            val metaObj = JSONObject()
-            metaObj.put("type", "metadata")
-            val gravityArray = JSONArray()
+            jsonWriter?.beginObject()
+            jsonWriter?.name("type")?.value("metadata")
+            
             deviceGravity?.let {
-                gravityArray.put(it[0])
-                gravityArray.put(it[1])
-                gravityArray.put(it[2])
+                jsonWriter?.name("device_gravity_vector")
+                jsonWriter?.beginArray()
+                jsonWriter?.value(it[0])
+                jsonWriter?.value(it[1])
+                jsonWriter?.value(it[2])
+                jsonWriter?.endArray()
             }
-            metaObj.put("device_gravity_vector", gravityArray)
-            writer?.write(metaObj.toString() + ",\n")
+            if (calibratedTPoseJson != null) {
+                // Since calibratedTPoseJson is org.json.JSONArray, write it as a raw string inside our JSON?
+                // Wait, JsonWriter doesn't easily append raw JSON strings except by manually parsing or using .value().
+                // Let's just iterate through calibratedTPoseJson to write proper JSON, or leave it as string.
+                // Actually parse the JSONArray back.
+                jsonWriter?.name("tpose")
+                jsonWriter?.beginArray()
+                for (i in 0 until calibratedTPoseJson!!.length()) {
+                    val lmJson = calibratedTPoseJson!!.getJSONObject(i)
+                    jsonWriter?.beginObject()
+                    if (lmJson.has("id")) jsonWriter?.name("id")?.value(lmJson.getInt("id"))
+                    if (lmJson.has("x")) jsonWriter?.name("x")?.value(lmJson.getDouble("x"))
+                    if (lmJson.has("y")) jsonWriter?.name("y")?.value(lmJson.getDouble("y"))
+                    if (lmJson.has("z")) jsonWriter?.name("z")?.value(lmJson.getDouble("z"))
+                    if (lmJson.has("visibility")) jsonWriter?.name("visibility")?.value(lmJson.getDouble("visibility"))
+                    jsonWriter?.endObject()
+                }
+                jsonWriter?.endArray()
+            }
+            jsonWriter?.endObject()
             
         } catch (e: Exception) {
             e.printStackTrace()
-            // Proceed without file logging safely
             currentFile = null
-            writer = null
+            jsonWriter = null
         }
         
         startTimeMillis = System.currentTimeMillis()
@@ -136,8 +169,8 @@ class PoseRecorder(private val context: Context) {
         isRecording = false
         if (frameCount == 0 || currentFile == null) {
             try {
-                writer?.close()
-                writer = null
+                jsonWriter?.close()
+                jsonWriter = null
             } catch (ignored: Exception) {}
             return null
         }
@@ -145,9 +178,9 @@ class PoseRecorder(private val context: Context) {
         lastSessionStats = SessionStats(totalConf / frameCount, lowConfFrames, frameCount)
         
         try {
-            writer?.write("\n]")
-            writer?.close()
-            writer = null
+            jsonWriter?.endArray()
+            jsonWriter?.close()
+            jsonWriter = null
             return currentFile
         } catch (e: Exception) {
             e.printStackTrace()
@@ -186,7 +219,7 @@ class PoseRecorder(private val context: Context) {
             var confidence = landmark.inFrameLikelihood
             
             // Initialization
-            if (kalmanStates[id][0].cov == 1f && previousLandmarks[id] == null) {
+            if (kalmanStates[id][0].cov == 1f && !previousLandmarksValid[id]) {
                 kalmanStates[id][0].p = posX
                 kalmanStates[id][1].p = posY
                 kalmanStates[id][2].p = posZ
@@ -201,8 +234,8 @@ class PoseRecorder(private val context: Context) {
                     if (occludedCount > 4) {
                          // Interpolate down to hip
                          val hipId = if (id == 15) 23 else 24
-                         val hipPos = previousLandmarks[hipId]
-                         if (hipPos != null) {
+                         if (previousLandmarksValid[hipId]) {
+                             val hipPos = previousLandmarks[hipId]
                              posX = kalmanStates[id][0].p + (hipPos[0] - kalmanStates[id][0].p) * 0.1f
                              posY = kalmanStates[id][1].p + ((hipPos[1] + 150f) - kalmanStates[id][1].p) * 0.1f // Add to Y to drop it slightly below hip
                              posZ = kalmanStates[id][2].p + (hipPos[2] - kalmanStates[id][2].p) * 0.1f
@@ -220,11 +253,13 @@ class PoseRecorder(private val context: Context) {
 
             // 4. Kalman Update
             val R = 1.0f / (confidence.coerceAtLeast(0.001f) * 10f)
-            val measures = floatArrayOf(posX, posY, posZ)
+            tempMeasures[0] = posX
+            tempMeasures[1] = posY
+            tempMeasures[2] = posZ
             
             for (axis in 0..2) {
                 val state = kalmanStates[id][axis]
-                val measure = measures[axis]
+                val measure = tempMeasures[axis]
                 
                 // Predict with slight velocity damping
                 var dampedV = state.v * 0.95f
@@ -237,21 +272,21 @@ class PoseRecorder(private val context: Context) {
                 state.v = dampedV + (K * (measure - predP) / dt).coerceIn(-500f, 500f) // clamp velocity
                 state.cov = (1 - K) * predCov
                 
-                measures[axis] = state.p
+                tempMeasures[axis] = state.p
             }
             
             var planted = 0f
             if (id == 31 || id == 32) {
-                if (previousLandmarks[id] != null && confidence > 0.4f) {
-                    val dy = kotlin.math.abs(measures[1] - previousLandmarks[id]!![1])
+                if (previousLandmarksValid[id] && confidence > 0.4f) {
+                    val dy = kotlin.math.abs(tempMeasures[1] - previousLandmarks[id][1])
                     if (dy < 2.0f) planted = 1f
                 }
             }
             
             val baseIdx = id * 5
-            landmarkData[baseIdx] = measures[0]
-            landmarkData[baseIdx + 1] = measures[1]
-            landmarkData[baseIdx + 2] = measures[2]
+            landmarkData[baseIdx] = tempMeasures[0]
+            landmarkData[baseIdx + 1] = tempMeasures[1]
+            landmarkData[baseIdx + 2] = tempMeasures[2]
             landmarkData[baseIdx + 3] = confidence
             landmarkData[baseIdx + 4] = planted
         }
@@ -358,7 +393,10 @@ class PoseRecorder(private val context: Context) {
 
         // Finalize state update
         for (i in 0 until 33) {
-            previousLandmarks[i] = floatArrayOf(landmarkData[i*5], landmarkData[i*5+1], landmarkData[i*5+2])
+            previousLandmarks[i][0] = landmarkData[i*5]
+            previousLandmarks[i][1] = landmarkData[i*5+1]
+            previousLandmarks[i][2] = landmarkData[i*5+2]
+            previousLandmarksValid[i] = true
         }
         
         var sumConf = 0f
@@ -370,33 +408,32 @@ class PoseRecorder(private val context: Context) {
         totalConf += avgConf
         
         try {
-            if (writer != null) {
-                val frameObj = JSONObject()
-                frameObj.put("frame", frameCount)
-                frameObj.put("timestamp", timestamp)
-                frameObj.put("timestamp_utc", timestampUtc)
+            if (jsonWriter != null) {
+                jsonWriter?.beginObject()
+                jsonWriter?.name("frame")?.value(frameCount)
+                jsonWriter?.name("timestamp")?.value(timestamp)
+                jsonWriter?.name("timestamp_utc")?.value(timestampUtc)
                 
-                val landmarksArray = JSONArray()
+                jsonWriter?.name("landmarks")
+                jsonWriter?.beginArray()
                 for (i in 0 until 33) {
                     val baseIdx = i * 5
-                    val landmarkObj = JSONObject()
-                    landmarkObj.put("id", i)
-                    landmarkObj.put("x", landmarkData[baseIdx])
-                    landmarkObj.put("y", landmarkData[baseIdx + 1])
-                    landmarkObj.put("z", landmarkData[baseIdx + 2])
-                    landmarkObj.put("visibility", landmarkData[baseIdx + 3])
+                    
+                    jsonWriter?.beginObject()
+                    jsonWriter?.name("id")?.value(i)
+                    jsonWriter?.name("x")?.value(landmarkData[baseIdx])
+                    jsonWriter?.name("y")?.value(landmarkData[baseIdx + 1])
+                    jsonWriter?.name("z")?.value(landmarkData[baseIdx + 2])
+                    jsonWriter?.name("visibility")?.value(landmarkData[baseIdx + 3])
                     
                     if (i == 31 || i == 32) {
-                        landmarkObj.put("planted", landmarkData[baseIdx + 4].toInt())
+                        jsonWriter?.name("planted")?.value(landmarkData[baseIdx + 4].toInt())
                     }
-                    landmarksArray.put(landmarkObj)
+                    jsonWriter?.endObject()
                 }
-                frameObj.put("landmarks", landmarksArray)
+                jsonWriter?.endArray()
                 
-                if (frameCount > 0) {
-                    writer?.write(",\n")
-                }
-                writer?.write(frameObj.toString())
+                jsonWriter?.endObject()
             }
         } catch (e: Exception) {
             e.printStackTrace()
