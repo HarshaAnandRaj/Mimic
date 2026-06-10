@@ -1,38 +1,40 @@
 # Mimic - Intelligent Mock Android Mocap Engine 🕺📱
 
-Mimic is an Android-native motion capture application that records human body movement in real-time. Operating under severe hardware, optical, and thermal bottlenecks, the app is designed as an **Intelligent Mock Engine**. It enforces spatial and mathematical guardrails over probabilistic AI tracking data to output clean animation streams, primarily aimed at VTubers and indie animators.
+Mimic is an Android-native motion capture application that records human body movement in real-time. Operating under severe hardware, optical, and thermal bottlenecks, the app is designed as an **Intelligent Mock Engine**. It enforces spatial and mathematical guardrails over probabilistic AI tracking data to output clean animation streams, primarily aimed at Indie film makers and indie animators.
 
 ## 🟢 Currently Implemented Features
 
 *   **Real-time Pose Detection:** Leverages Google's ML Kit Pose Detection to capture 33 3D body landmarks at roughly 30 FPS in metric world space.
-*   **"Ghost Mode" (Zero-Video Capture):** A privacy-first mode that completely unbinds the camera preview. Only math is rendered; zero pixels are shown or recorded.
-*   **Air-Gapped Architecture:** All processing runs entirely on-device. The app does not even request the Android `INTERNET` permission.
-*   **Sandboxed Storage:** Raw motion data is continuously flushed to the app's internal cache storage, protecting it from other apps.
+*   **Real-time Face Tracking:** Uses ML Kit Face Mesh detection to track 468 3D points, complete with an **ARKit 52 Blendshapes** mathematical solver for direct compatibility with Unreal Engine and Indie film maker software.
+*   **Audio-Driven Lip Sync (Visemes):** Runs an integrated audio analyzer to generate phonetic visemes, blending mic data with optical data for flawless lip-syncing even when the mouth is occluded.
+*   **6-DoF Head Pose & Eye Gaze Vectors:** Calculates precise absolute real-world head rotation (Pitch, Yaw, Roll) and tracks pupil alignment for natural "darting" eye movements and accurate avatars.
+*   **Local UDP Streaming (VMC OSC):** Broadcasts real-time motion control data over Wi-Fi to desktop clients like VTube Studio and Blender, bypassing the need for file exports.
+*   **High-Performance Zero-Allocation Engine:** Designed to eliminate Garbage Collection (GC) stutters by utilizing pre-allocated arrays in the "Hot Loop" and streamlining JSON creation with `android.util.JsonWriter`.
+*   **Active Thermal Throttling:** Monitors the NPU and CPU temperature, programmatically dropping frame rates to save the session and hardware from overheating crashes.
+*   **"Ghost Mode" (Hardware Dimming & Zero-Video):** A privacy-first tool that unbinds the camera preview and dynamically drops hardware screen brightness to 1%, allowing hours of battery-friendly recording while rendering zero pixels.
 *   **Gravity-Aligned World Space:** Uses the hardware accelerometer to detect the phone's physical tilt and injects gravity vectors into the metadata, ensuring characters stand flat on virtual floors.
-*   **Universal Timecode Injection:** Injects absolute UTC Epoch Timestamps into every frame for perfect sync with external facial mocap (e.g., iPhone ARKit).
+*   **Universal Timecode Injection:** Injects absolute UTC Epoch Timestamps into every frame for perfect sync with external workflows.
 *   **Heuristic Foot-Contact Flags:** Calculates ankle velocity and vertical position to inject tiny boolean flags into the data, acting as triggers for IK lock in Blender.
 *   **Dynamic Velocity Clamping:** A biomechanical constraint that caps impossible frame-by-frame joint accelerations to smooth out motion blur spikes.
 *   **Long-Distance Telemetry UX:** Emits hardware audio beeps during calibration states, accompanied by a high-visibility neon screen flash indicator for clear 10-foot visual feedback.
-*   **Bone Length Isolation (Distance Cage):** Locks limb proportions based on the T-pose calibration to prevent perspective distortion shrinking/stretching by enforcing physical distance limits along the calculated vectors.
+*   **Bone Length Isolation (Distance Cage):** Locks limb proportions based on the T-pose calibration to prevent perspective distortion shrinking/stretching.
 *   **Anatomical Hinge Clamping:** Hard biological rule enforcement via dot-product analysis to prevent impossible backward bends in hinge joints like elbows and knees.
 *   **Absolute Floor Penetration Guard:** Dynamically locks vertical axis thresholds based on ground floor ankle states during calibration to forbid any tracking coordinate from sinking "underground".
 *   **Kalman Filter Temporal Smoothing:** An aerospace-grade predictive algorithm that out-performs simple EMA by balancing measurement confidence and projected velocity to eliminate jitter without inducing tracker lag.
-*   **Occlusion Fallback (Dead-Reckoning):** A safety algorithm triggered by drops in tracking confidence that intuitively interpolates hidden joints (like occluded wrists) to natural resting positions instead of allowing them to clip inside the chest cavity.
+*   **Occlusion Fallback (Dead-Reckoning):** A safety algorithm triggered by drops in tracking confidence that intuitively interpolates hidden joints to natural resting positions.
 
 ## 🔜 Yet to be Added (Planned Features)
 
-While the core tracking and privacy architecture is complete, the following advanced engine features are actively under development:
+While the core tracking and architecture is incredibly robust, the following features are actively under development:
 
 *   **Subject Locking (ROI Photobomb Rejector):** Bounding box isolation to prevent the tracker from snapping to background individuals during a session.
 *   **Probabilistic Preflight & Quality Swapping:** Dynamically shifting the camera resolution between 1080p and 480p based on thermal and memory survival indexing.
-*   **Flat Binary `.raw` Streams:** Transitioning from the current JSON scratch files to a zero-object-allocation sequential binary scratch stream to bypass the Java Garbage Collector entirely.
-*   **Local UDP Streaming (VMC):** Real-time Wi-Fi streaming to desktop software (Blender / VSeeFace) with optional AES-128 PIN encryption.
 *   **Native BVH Export:** Currently, the app exports structured JSON payload. A local builder to compile this JSON into standard Biovision Hierarchy (`.bvh`) skeleton files on-device is planned.
 
 ## Privacy & Safety 🔒
 
 Mimic is built with **Aggressive Transparency UX**.
-Privacy is not an afterthought; it is our core feature for digital creators. You can view the Zero-Cloud Privacy Policy directly in the HUD. The app guarantees that your video feed is never transmitted, and motion data remains safely sandboxed until you explicitly choose to export it using the Android Storage Access Framework.
+Privacy is not an afterthought; it is our core feature for digital creators. You can view the Zero-Cloud Privacy Policy directly in the HUD. The app guarantees that your video feed is never transmitted. The added `INTERNET` and `RECORD_AUDIO` permissions are used explicitly for local-network UDP transmission (VMC OSC) and local lip-sync viseme extraction. Data remains safely sandboxed until you explicitly choose to export or broadcast it.
 
 ## Architecture & Tech Stack 🛠️
 

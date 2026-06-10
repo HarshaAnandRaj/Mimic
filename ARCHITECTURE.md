@@ -1,6 +1,6 @@
 # Technical System Overview: Intelligent Mock Android Mocap Engine
 
-This document outlines the architecture, data pipeline, and structural constraints for a free, native Android motion capture application. Operating under severe hardware, optical, and thermal bottlenecks, the app is designed not as an absolute 3D measurement utility, but as an **Intelligent Mock Engine**. It enforces strict spatial, anatomical, and mathematical guardrails over probabilistic AI tracking data to output clean, production-ready animation streams.
+This document outlines the architecture, data pipeline, and structural constraints for a free, native Android motion capture application. Operating under severe hardware, optical, and thermal bottlenecks, the app is designed not as an absolute 3D measurement utility, but as an **Intelligent Mock Engine**. It enforces strict spatial, anatomical, and mathematical guardrails over probabilistic AI tracking data to output clean, production-ready animation streams for both Body and Face tracking.
 
 ---
 
@@ -10,27 +10,18 @@ The on-device mobile pipeline runs entirely decoupled across distinct processing
 
 ```
 [ CameraX Input Pipeline ]
-       │  (Continuous 720p / 30 FPS Stream)
+       │  (Continuous 720p / 30-60 FPS Stream)
        ▼
-[ Preflight Capability Profiler ] ──► Calculates Survival Index (S) to set Video quality
+[ MediaPipe Tasks-Vision Engine ] ──► Extracts Body Pose (33 points) or Face Mesh (468 points)
        │
        ▼
-[ MediaPipe Tasks-Vision Engine ] ──► Extracts 3D Pose World Landmarks (Metric Meters)
-       │
+[ Mathematical Solver & Audio Layer ]
+       │  • Body: Distance Cage, Velocity Clamps, Kalman Prediction
+       │  • Face: 52 ARKit Blendshapes mapped via geometric distance
+       │  • Face: 6-DoF Head Pose (Pitch/Yaw/Roll) & Eye Gaze Vectors
+       │  • Audio: Viseme extraction (Phenotypic Lip Sync) via Mic
        ▼
-[ Deterministic State Machine ]  ──► Controls lifecycle (Uninitialized ➔ Calibration ➔ Tracking)
-       │
-       ▼
-[ Biomechanical Constraint Layer ] 
-       │  • Rule 1: Distance Cage (Proportion Length Lock)
-       │  • Rule 2: Axis Box (Anatomical Angular Clamping)
-       │  • Rule 3: Floor Penetration Guard (Gravity Anchor)
-       │  • Rule 4: Dynamic Velocity Cage (Motion Blur Shutter Ceiling)
-       │  • Rule 5: Kalman Tracking (Predictive State Estimation)
-       │
-       ▼
-[ Memory Bounded Cache Stream ]  ──► Reusable FloatArray ➔ Raw Sequential Binary Local Disk Cache
-
+[ Memory Bounded Cache Stream ]  ──► Reusable Arrays ➔ JsonWriter Disk Cache & UDP OSC Wi-Fi Stream
 ```
 
 ---
@@ -99,12 +90,12 @@ To survive on low-tier or thermally throttled Android devices without getting te
 ### The Bounded Streaming Pipeline
 
 * **Zero Object Allocations:** The application bypasses the Java Garbage Collector during recording by entirely avoiding object instantiations inside the tracking loop. Raw landmark floats are poured directly into a single, flat, reusable primitive `FloatArray`.
-* **Sequential Binary Scratch Files:** Instead of caching thousands of frames in the device RAM, data is continuously flushed to local app cache storage as a raw, uncompressed binary `.raw` file stream in 64KB chunks.
+* **Sequential Streaming to Disk:** Instead of caching thousands of frames in the device RAM or relying on slow, memory-heavy `JSONObject` creation, data is continuously flushed to local app cache storage using `android.util.JsonWriter`. This streams valid JSON text directly to the file stream without allocating intermediate garbage-collected objects.
+* **Local UDP Output (VMC OSC):** Alongside disk writing, the engine utilizes a background thread to broadcast real-time FloatArrays over a UDP socket. Utilizing the Virtual Motion Capture Open Sound Control (VMC OSC) protocol allows desktop tools (Unreal Engine, VTube Studio) to ingest Face and Body streams without ever touching the device's storage.
 
-### Probabilistic Preflight & Quality Swapping
+### Active Thermal Throttling & "Ghost Mode"
 
-Because Android locks the video encoding parameters (`MediaCodec`) the moment recording begins, the resolution cannot be altered mid-capture. The app uses a **Preflight Profiler** to evaluate system memory, available storage, and current thermal metrics to calculate a **Survival Index ($S$)**:
+Because optical tracking and camera hardware generates significant heat, the engine employs strict survival tactics:
 
-* **Optimal Path ($S \ge 0.85$):** Launches the session with high-resolution **1080p Full HD** reference video alongside full tracking topology.
-* **Resource Conservation Path ($S < 0.50$):** Forces the camera framework to initialize video capture at an ultra-low **480p SD** profile. This drastically minimizes memory bus and encoder pressure, ensuring the phone stays cool and the core skeletal float stream and real-time confidence metrics run safely without dropping frames.
-* **Mid-Session Emergency Soft Drop:** If thermal throttling spikes unexpectedly mid-recording, the system executes a soft stop on the video encoder to write out the partial reference file and unbinds the video use case entirely. The hardware codec memory is instantly reclaimed, while the lightweight tracking loop continues logging skeletal vectors to disk uninterrupted.
+* **Hardware Screen Dimming (Ghost Mode):** The highest battery draw and heat generator on a mobile device is its screen. When activated, Ghost Mode programmatically overrides Android's `WindowManager.LayoutParams` to unbind the preview and drop the hardware backlight to 1%. This cools the device during extended two-hour MoCap sessions while capturing zero video pixels.
+* **Active Thermal Throttling:** The app listens to Android's `PowerManager.OnThermalStatusChangedListener`. If the device CPU/NPU reaches the `THERMAL_STATUS_SEVERE` threshold, the camera analyzer forcefully drops tracking from 60 FPS to 30 FPS by `return`ing out of every alternating frame. This cools the system and saves the session from being killed by the Android OS.
