@@ -20,23 +20,22 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.foundation.background
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.isActive
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.pose.Pose
 import com.google.mlkit.vision.pose.PoseDetection
 import com.google.mlkit.vision.pose.accurate.AccuratePoseDetectorOptions
-import com.google.mlkit.vision.facemesh.FaceMeshDetection
-import com.google.mlkit.vision.facemesh.FaceMeshDetectorOptions
-import com.google.mlkit.vision.facemesh.FaceMesh 
 
 enum class TrackingMode { BODY, FACE }
 
 @Composable
 fun CameraPreviewAndAnalysis(
     trackingMode: TrackingMode = TrackingMode.BODY,
-    onPoseDetected: (Pose, Int, Int) -> Unit = {_,_,_->},
-    onFaceDetected: (FaceMesh, Int, Int) -> Unit = {_,_,_->},
+    onPoseDetected: (SmoothedPose, Int, Int) -> Unit = {_,_,_->},
+    onFaceDetected: (FaceTrackingFrame, Int, Int) -> Unit = {_,_,_->},
     modifier: Modifier = Modifier,
     isFlashActive: Boolean = false,
     isGhostMode: Boolean = false,
@@ -45,195 +44,223 @@ fun CameraPreviewAndAnalysis(
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val activity = LocalContext.current as androidx.activity.ComponentActivity
 
-    var cameraProvider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
+    val cameraProviderFuture = remember { ProcessCameraProvider.getInstance(context) }
     val backgroundExecutor = remember { java.util.concurrent.Executors.newSingleThreadExecutor() }
     
-    // We will keep a reference to camera to change flash later
-    var camera by remember { mutableStateOf<androidx.camera.core.Camera?>(null) }
-    var previewView by remember { mutableStateOf<PreviewView?>(null) }
-    var frameCounter by remember { mutableStateOf(0) }
-    
-    LaunchedEffect(isFlashActive) {
-        camera?.cameraControl?.enableTorch(isFlashActive)
-    }
-
     val options = remember {
         AccuratePoseDetectorOptions.Builder()
             .setDetectorMode(AccuratePoseDetectorOptions.STREAM_MODE)
             .build()
     }
     val poseDetector = remember { PoseDetection.getClient(options) }
+    val prefs = remember { context.getSharedPreferences("mocap_prefs", android.content.Context.MODE_PRIVATE) }
+    val poseProcessor = remember { 
+        AdaptivePoseProcessor().apply {
+            val savedRl = prefs.getString("rl_memory", null)
+            if (savedRl != null) loadData(savedRl)
+        }
+    }
 
-    val faceOptions = remember {
-        FaceMeshDetectorOptions.Builder()
-            .setUseCase(FaceMeshDetectorOptions.FACE_MESH)
+    // MediaPipe face tracker state
+    var currentFaceWidth by remember { mutableStateOf(0) }
+    var currentFaceHeight by remember { mutableStateOf(0) }
+    
+    val currentOnPoseDetected by rememberUpdatedState(onPoseDetected)
+    val currentOnFaceDetected by rememberUpdatedState(onFaceDetected)
+    val currentIsOverheating by rememberUpdatedState(isOverheating)
+
+    val faceTracker = remember(context) { 
+        try {
+            MediaPipeFaceTracker(
+                context = context,
+                onFrame = { frame ->
+                    currentOnFaceDetected(frame, currentFaceWidth, currentFaceHeight)
+                },
+                onError = { it.printStackTrace() }
+            ) 
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        } catch (e: Error) { // Traps fatal native crashes like UnsatisfiedLinkError
+            e.printStackTrace()
+            null
+        }
+    }
+    
+    var cameraControl by remember { mutableStateOf<androidx.camera.core.CameraControl?>(null) }
+    
+    DisposableEffect(Unit) {
+        onDispose {
+            prefs.edit().putString("rl_memory", poseProcessor.getSaveData()).apply()
+            try { cameraProviderFuture.get().unbindAll() } catch (e: Exception) {}
+            Thread {
+                Thread.sleep(500)
+                try { poseDetector.close() } catch (e: Exception) {}
+                try { faceTracker?.close() } catch (e: Exception) {}
+                try { backgroundExecutor.shutdown() } catch (e: Exception) {}
+            }.start()
+        }
+    }
+    
+    LaunchedEffect(isFlashActive, cameraControl) {
+        try {
+            cameraControl?.enableTorch(isFlashActive)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+    
+    val resolutionSelector = remember {
+        ResolutionSelector.Builder()
+            .setAspectRatioStrategy(androidx.camera.core.resolutionselector.AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
             .build()
     }
-    val faceDetector = remember { FaceMeshDetection.getClient(faceOptions) }
 
-    var lifecycleState by remember { mutableStateOf(lifecycleOwner.lifecycle.currentState) }
-    DisposableEffect(lifecycleOwner) {
-        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
-            lifecycleState = event.targetState
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-            try {
-                cameraProvider?.unbindAll()
-            } catch (e: Exception) {}
-        }
-    }
-
-    val currentOverheating by rememberUpdatedState(isOverheating)
-    val view = androidx.compose.ui.platform.LocalView.current
-    var hasWindowFocus by remember { mutableStateOf(view.hasWindowFocus()) }
-    DisposableEffect(view) {
-        val listener = android.view.ViewTreeObserver.OnWindowFocusChangeListener { focus ->
-            hasWindowFocus = focus
-        }
-        view.viewTreeObserver.addOnWindowFocusChangeListener(listener)
-        onDispose {
-            view.viewTreeObserver.removeOnWindowFocusChangeListener(listener)
-        }
-    }
-
-    LaunchedEffect(isGhostMode, isFrontCamera, previewView, trackingMode, lifecycleState, hasWindowFocus) {
-        if (previewView == null) return@LaunchedEffect
-        if (!lifecycleState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) return@LaunchedEffect
-        if (!hasWindowFocus) return@LaunchedEffect
-        
-        val scope = this // Capture the coroutine scope for cancellation check
-
-        // Delay carefully to ensure AppOps is fully ready and our permission state is flushed to system
-        kotlinx.coroutines.delay(1500)
-
-        // Pre-check for generic emulator to avoid AppOps error spam in logs
-        val isGenericEmulator = android.os.Build.FINGERPRINT.contains("generic", ignoreCase = true) || 
-                                android.os.Build.MODEL.contains("sdk", ignoreCase = true) ||
-                                android.os.Build.MODEL.contains("Emulator", ignoreCase = true) ||
-                                android.os.Build.DEVICE.contains("vsoc", ignoreCase = true) ||
-                                android.os.Build.DEVICE.contains("cf_", ignoreCase = true) ||
-                                android.os.Build.HARDWARE.contains("cutf", ignoreCase = true)
-        
-        if (isGenericEmulator) {
-            return@LaunchedEffect
-        }
-
-        val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
-
-        cameraProviderFuture.addListener({
-            if (!scope.isActive) return@addListener // PREVENT LISTENER LEAK
-            if (!lifecycleState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) return@addListener
-            if (!hasWindowFocus) return@addListener
-            try {
-                cameraProvider = cameraProviderFuture.get()
-                
-                val imageAnalyzer = ImageAnalysis.Builder()
-                    .setResolutionSelector(
-                        ResolutionSelector.Builder()
-                            .setResolutionStrategy(ResolutionStrategy(Size(480, 640), ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER))
-                            .build()
-                    )
-                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                    .build()
-                    .also {
-                        it.setAnalyzer(backgroundExecutor) { imageProxy ->
-                            frameCounter++
-                            if (currentOverheating && frameCounter % 2 == 0) {
-                                imageProxy.close()
-                                return@setAnalyzer
-                            }
-                            
-                            if (trackingMode == TrackingMode.BODY) {
-                                processImageProxy(poseDetector, imageProxy) { pose, width, height ->
-                                    onPoseDetected(pose, width, height)
-                                }
-                            } else {
-                                processFaceImageProxy(faceDetector, imageProxy) { faceMesh, width, height ->
-                                    onFaceDetected(faceMesh, width, height)
-                                }
-                            }
-                        }
-                    }
-
-                var cameraSelector = if (trackingMode == TrackingMode.FACE) CameraSelector.DEFAULT_FRONT_CAMERA else if (isFrontCamera) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
-
-                try {
-                    // Fallback to back camera if front camera is not available, or vice versa
-                    if (cameraProvider?.hasCamera(cameraSelector) != true) {
-                        cameraSelector = if (cameraSelector == CameraSelector.DEFAULT_FRONT_CAMERA) {
-                            CameraSelector.DEFAULT_BACK_CAMERA
-                        } else {
-                            CameraSelector.DEFAULT_FRONT_CAMERA
-                        }
-                    }
-                    if (cameraProvider?.hasCamera(cameraSelector) != true) {
-                        val externalSelector = androidx.camera.core.CameraSelector.Builder()
-                            .requireLensFacing(androidx.camera.core.CameraSelector.LENS_FACING_EXTERNAL)
-                            .build()
-                        if (cameraProvider?.hasCamera(externalSelector) == true) {
-                            cameraSelector = externalSelector
-                        } else {
-                            // Just try binding ANY available camera if we reach this point
-                            val infos = cameraProvider?.availableCameraInfos
-                            if (infos?.isNotEmpty() == true) {
-                                cameraSelector = infos.first().cameraSelector
-                            } else {
-                                return@addListener
-                            }
-                        }
-                    }
-                    cameraProvider?.unbindAll()
-                    
-                    if (isGhostMode) {
-                        // Ghost mode: Only bind ImageAnalysis, zero preview rendering
-                        camera = cameraProvider?.bindToLifecycle(
-                            activity, cameraSelector, imageAnalyzer
-                        )
-                    } else {
-                        val preview = Preview.Builder().build().also {
-                            it.setSurfaceProvider(previewView!!.surfaceProvider)
-                        }
-                        camera = cameraProvider?.bindToLifecycle(
-                            activity, cameraSelector, preview, imageAnalyzer
-                        )
-                    }
-                    camera?.cameraControl?.enableTorch(isFlashActive)
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }, ContextCompat.getMainExecutor(context))
-    }
-
-    Box(modifier = modifier.fillMaxSize()) {
-        if (isGhostMode) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black)
-            )
-        }
-        
-        AndroidView(
-            factory = { ctx ->
-                PreviewView(ctx).apply {
+    Box(modifier = modifier) {
+        if (!isGhostMode) {
+            val previewView = remember {
+                PreviewView(context).apply {
                     scaleType = PreviewView.ScaleType.FILL_CENTER
                     implementationMode = PreviewView.ImplementationMode.COMPATIBLE
                 }
-            },
-            update = { pv ->
-                previewView = pv
-            },
-            modifier = Modifier.fillMaxSize().let { 
-                if (isGhostMode) it.alpha(0.01f) else it 
             }
-        )
+
+            DisposableEffect(trackingMode, isFrontCamera) {
+                val listener = Runnable {
+                    try {
+                        val cameraProvider = cameraProviderFuture.get()
+                        
+                        val preview = Preview.Builder()
+                            .setResolutionSelector(resolutionSelector)
+                            .build()
+                            .also {
+                                it.setSurfaceProvider(previewView.surfaceProvider)
+                            }
+                            
+                        var frameCounter = 0
+                        val imageAnalyzer = ImageAnalysis.Builder()
+                            .setResolutionSelector(resolutionSelector)
+                            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                            .build()
+                            .also {
+                                it.setAnalyzer(backgroundExecutor) { imageProxy ->
+                                    frameCounter++
+                                    if (currentIsOverheating && frameCounter % 2 == 0) {
+                                        imageProxy.close()
+                                        return@setAnalyzer
+                                    }
+                                    if (trackingMode == TrackingMode.BODY) {
+                                        processImageProxy(poseDetector, imageProxy) { pose, width, height, timestamp ->
+                                            val smoothedPose = poseProcessor.process(pose, timestamp)
+                                            currentOnPoseDetected(smoothedPose, width, height)
+                                        }
+                                    } else {
+                                        processMpFaceImageProxy(faceTracker, imageProxy) { width, height ->
+                                            currentFaceWidth = width
+                                            currentFaceHeight = height
+                                        }
+                                    }
+                                }
+                            }
+                            
+                        var cameraSelector = if (trackingMode == TrackingMode.FACE) CameraSelector.DEFAULT_FRONT_CAMERA else if (isFrontCamera) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
+                        try {
+                            if (!cameraProvider.hasCamera(cameraSelector)) {
+                                cameraSelector = if (cameraSelector == CameraSelector.DEFAULT_FRONT_CAMERA) CameraSelector.DEFAULT_BACK_CAMERA else CameraSelector.DEFAULT_FRONT_CAMERA
+                            }
+                        } catch (e: Exception) {}
+
+                        try {
+                            cameraProvider.unbindAll()
+                            val camera = cameraProvider.bindToLifecycle(
+                                lifecycleOwner,
+                                cameraSelector,
+                                preview,
+                                imageAnalyzer
+                            )
+                            cameraControl = camera.cameraControl
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                            android.widget.Toast.makeText(context, "Camera locked by another app!", android.widget.Toast.LENGTH_LONG).show()
+                        }
+                    } catch (e: Exception) {}
+                }
+                cameraProviderFuture.addListener(listener, ContextCompat.getMainExecutor(context))
+                onDispose {
+                    try { cameraProviderFuture.get().unbindAll() } catch (e: Exception) {}
+                }
+            }
+
+            AndroidView(
+                factory = { previewView },
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(androidx.compose.foundation.shape.RoundedCornerShape(24.dp))
+            )
+        } else {
+            Box(Modifier.fillMaxSize().background(Color.Black))
+            
+            DisposableEffect(trackingMode, isFrontCamera) {
+                val listener = Runnable {
+                    try {
+                        val cameraProvider = cameraProviderFuture.get()
+                        var frameCounter = 0
+                        val imageAnalyzer = ImageAnalysis.Builder()
+                            .setResolutionSelector(resolutionSelector)
+                            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                            .build()
+                            .also {
+                                it.setAnalyzer(backgroundExecutor) { imageProxy ->
+                                    frameCounter++
+                                    if (currentIsOverheating && frameCounter % 2 == 0) {
+                                        imageProxy.close()
+                                        return@setAnalyzer
+                                    }
+                                    if (trackingMode == TrackingMode.BODY) {
+                                        processImageProxy(poseDetector, imageProxy) { pose, width, height, timestamp ->
+                                            val smoothedPose = poseProcessor.process(pose, timestamp)
+                                            currentOnPoseDetected(smoothedPose, width, height)
+                                        }
+                                    } else {
+                                        processMpFaceImageProxy(faceTracker, imageProxy) { width, height ->
+                                            currentFaceWidth = width
+                                            currentFaceHeight = height
+                                        }
+                                    }
+                                }
+                            }
+                        
+                        var cameraSelector = if (trackingMode == TrackingMode.FACE) CameraSelector.DEFAULT_FRONT_CAMERA else if (isFrontCamera) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
+                        try {
+                            if (!cameraProvider.hasCamera(cameraSelector)) {
+                                cameraSelector = if (cameraSelector == CameraSelector.DEFAULT_FRONT_CAMERA) CameraSelector.DEFAULT_BACK_CAMERA else CameraSelector.DEFAULT_FRONT_CAMERA
+                            }
+                        } catch (e: Exception) {}
+                        
+                        val dummyPreview = Preview.Builder().build()
+
+                        try {
+                            cameraProvider.unbindAll()
+                            val camera = cameraProvider.bindToLifecycle(
+                                lifecycleOwner,
+                                cameraSelector,
+                                dummyPreview,
+                                imageAnalyzer
+                            )
+                            cameraControl = camera.cameraControl
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                            android.widget.Toast.makeText(context, "Camera locked by another app!", android.widget.Toast.LENGTH_LONG).show()
+                        }
+                    } catch (e: Exception) {}
+                }
+                cameraProviderFuture.addListener(listener, ContextCompat.getMainExecutor(context))
+                onDispose {
+                    try { cameraProviderFuture.get().unbindAll() } catch (e: Exception) {}
+                }
+            }
+        }
     }
 }
 
@@ -241,55 +268,63 @@ fun CameraPreviewAndAnalysis(
 private fun processImageProxy(
     poseDetector: com.google.mlkit.vision.pose.PoseDetector,
     imageProxy: ImageProxy,
-    onSuccess: (Pose, Int, Int) -> Unit
+    onSuccess: (Pose, Int, Int, Long) -> Unit
 ) {
-    val mediaImage = imageProxy.image
-    if (mediaImage != null) {
-        val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
-        poseDetector.process(image)
-            .addOnSuccessListener { pose ->
-                // Image dimensions can be swapped based on rotation
-                val isImageFlipped = imageProxy.imageInfo.rotationDegrees == 90 || imageProxy.imageInfo.rotationDegrees == 270
-                val width = if (isImageFlipped) imageProxy.height else imageProxy.width
-                val height = if (isImageFlipped) imageProxy.width else imageProxy.height
-                onSuccess(pose, width, height)
-            }
-            .addOnFailureListener {
-                // Ignore
-            }
-            .addOnCompleteListener {
-                imageProxy.close()
-            }
-    } else {
-        imageProxy.close()
+    try {
+        val mediaImage = imageProxy.image
+        if (mediaImage != null) {
+            val timestampMs = imageProxy.imageInfo.timestamp / 1000000
+            val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
+            poseDetector.process(image)
+                .addOnSuccessListener { pose ->
+                    val isImageFlipped = imageProxy.imageInfo.rotationDegrees == 90 || imageProxy.imageInfo.rotationDegrees == 270
+                    val width = if (isImageFlipped) imageProxy.height else imageProxy.width
+                    val height = if (isImageFlipped) imageProxy.width else imageProxy.height
+                    onSuccess(pose, width, height, timestampMs)
+                }
+                .addOnFailureListener {
+                    // Ignore
+                }
+                .addOnCompleteListener {
+                    imageProxy.close()
+                }
+        } else {
+            imageProxy.close()
+        }
+    } catch (e: Exception) {
+        e.printStackTrace()
+        try { imageProxy.close() } catch (ex: Exception) {}
     }
 }
 
-@SuppressLint("UnsafeOptInUsageError")
-private fun processFaceImageProxy(
-    faceDetector: com.google.mlkit.vision.facemesh.FaceMeshDetector,
+@android.annotation.SuppressLint("UnsafeOptInUsageError")
+private fun processMpFaceImageProxy(
+    faceTracker: MediaPipeFaceTracker?,
     imageProxy: ImageProxy,
-    onSuccess: (FaceMesh, Int, Int) -> Unit
+    onSuccess: (Int, Int) -> Unit
 ) {
-    val mediaImage = imageProxy.image
-    if (mediaImage != null) {
-        val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
-        faceDetector.process(image)
-            .addOnSuccessListener { faces ->
-                val isImageFlipped = imageProxy.imageInfo.rotationDegrees == 90 || imageProxy.imageInfo.rotationDegrees == 270
-                val width = if (isImageFlipped) imageProxy.height else imageProxy.width
-                val height = if (isImageFlipped) imageProxy.width else imageProxy.height
-                if (faces.isNotEmpty()) {
-                    onSuccess(faces[0], width, height)
-                }
-            }
-            .addOnFailureListener {
-                // Ignore
-            }
-            .addOnCompleteListener {
-                imageProxy.close()
-            }
-    } else {
+    try {
+        val bitmap = imageProxy.toBitmap()
+        // Rotate bitmap based on image proxy rotation
+        val isImageFlipped = imageProxy.imageInfo.rotationDegrees == 90 || imageProxy.imageInfo.rotationDegrees == 270
+        val width = if (isImageFlipped) imageProxy.height else imageProxy.width
+        val height = if (isImageFlipped) imageProxy.width else imageProxy.height
+        
+        val matrix = android.graphics.Matrix()
+        matrix.postRotate(imageProxy.imageInfo.rotationDegrees.toFloat())
+        
+        // Front camera might need horizontal flip, but we handle that in overlays usually.
+        val rotatedBitmap = android.graphics.Bitmap.createBitmap(
+            bitmap, 0, 0, bitmap.width, bitmap.height, matrix, false
+        )
+        
+        bitmap.recycle()
+        
+        onSuccess(rotatedBitmap.width, rotatedBitmap.height)
+        faceTracker?.detect(rotatedBitmap, imageProxy.imageInfo.timestamp / 1000000)
+    } catch (e: Exception) {
+        e.printStackTrace()
+    } finally {
         imageProxy.close()
     }
 }

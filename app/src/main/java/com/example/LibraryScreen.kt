@@ -6,6 +6,8 @@ import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -43,7 +45,7 @@ fun LibraryScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit
     val btnBg = androidx.compose.material3.MaterialTheme.colorScheme.surfaceVariant
 
     val downloadsDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
-    var files by remember { mutableStateOf(downloadsDir?.listFiles()?.toList()?.filter { it.extension == "json" || it.extension == "bvh" }?.sortedByDescending { it.lastModified() } ?: emptyList()) }
+    var files by remember { mutableStateOf(downloadsDir?.listFiles()?.toList()?.filter { it.extension == "json" }?.sortedByDescending { it.lastModified() } ?: emptyList()) }
 
     var showRenameDialog by remember { mutableStateOf<File?>(null) }
     var newName by remember { mutableStateOf("") }
@@ -52,7 +54,7 @@ fun LibraryScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit
     var isExporting by remember { mutableStateOf(false) }
     
     val refreshFiles = {
-        files = downloadsDir?.listFiles()?.toList()?.filter { it.extension == "json" || it.extension == "bvh" }?.sortedByDescending { it.lastModified() } ?: emptyList()
+        files = downloadsDir?.listFiles()?.toList()?.filter { it.extension == "json" }?.sortedByDescending { it.lastModified() } ?: emptyList()
     }
 
     LaunchedEffect(Unit) {
@@ -80,8 +82,9 @@ fun LibraryScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit
             confirmButton = {
                 TextButton(onClick = {
                     if (newName.isNotBlank()) {
+                        val safeName = newName.replace(Regex("[\\\\/:*?\"<>|]"), "_")
                         val extension = fileToRename.extension
-                        val finalName = if (newName.endsWith(".$extension")) newName else "$newName.$extension"
+                        val finalName = if (safeName.endsWith(".$extension")) safeName else "$safeName.$extension"
                         val newFile = File(fileToRename.parentFile, finalName)
                         if (fileToRename.renameTo(newFile)) {
                             refreshFiles()
@@ -97,52 +100,6 @@ fun LibraryScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit
             dismissButton = {
                 TextButton(onClick = { showRenameDialog = null }) {
                     Text("Cancel", color = textLight)
-                }
-            },
-            containerColor = panelBg
-        )
-    }
-
-    if (showExportDialog != null) {
-        val fileToShare = showExportDialog!!
-        var isFaceTracking = false
-        try {
-            val reader = java.io.FileReader(fileToShare)
-            val chars = CharArray(500)
-            val readChars = reader.read(chars)
-            reader.close()
-            if (readChars > 0) {
-                val header = String(chars, 0, readChars)
-                if (header.contains("\"tracking_mode\":\"FACE\"")) {
-                    isFaceTracking = true
-                }
-            }
-        } catch(e: Exception) {}
-        
-        AlertDialog(
-            onDismissRequest = { showExportDialog = null },
-            title = { Text("Export Format", color = textLight) },
-            text = { Text("Choose the format you want to export:", color = textLight.copy(alpha = 0.8f)) },
-            confirmButton = {
-                TextButton(onClick = {
-                    shareMocapFile(context, fileToShare, "json", onStart = { isExporting = true }, onComplete = { isExporting = false })
-                    showExportDialog = null
-                }) {
-                    Text("JSON", color = accentBlue)
-                }
-            },
-            dismissButton = {
-                if (!isFaceTracking) {
-                    TextButton(onClick = {
-                        shareMocapFile(context, fileToShare, "bvh", onStart = { isExporting = true }, onComplete = { isExporting = false })
-                        showExportDialog = null
-                    }) {
-                        Text("BVH (Beta)", color = accentBlue)
-                    }
-                } else {
-                    TextButton(onClick = { showExportDialog = null }) {
-                        Text("Cancel", color = textLight)
-                    }
                 }
             },
             containerColor = panelBg
@@ -203,7 +160,8 @@ fun LibraryScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit
             }
         } else {
             LazyColumn(
-                modifier = Modifier.weight(1f).padding(horizontal = 16.dp),
+                modifier = Modifier.weight(1f),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 items(files) { file ->
@@ -212,8 +170,13 @@ fun LibraryScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit
                         accentBlue = accentBlue,
                         textLight = textLight,
                         panelBg = panelBg,
-                        onDelete = {
-                            if (it.delete()) {
+                        onDelete = { fileToDelete ->
+                            val jsonDeleted = fileToDelete.delete()
+                            val bvhFile = java.io.File(fileToDelete.parentFile, fileToDelete.nameWithoutExtension + ".bvh")
+                            if (bvhFile.exists()) {
+                                bvhFile.delete()
+                            }
+                            if (jsonDeleted) {
                                 refreshFiles()
                             }
                         },
@@ -221,10 +184,13 @@ fun LibraryScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit
                             newName = it.nameWithoutExtension
                             showRenameDialog = it
                         },
-                        onShare = {
-                            showExportDialog = it
+                        onPlay = { f -> onPlay(f) },
+                        onExportJson = { f -> 
+                            shareMocapFile(context, f, "json", onStart = { isExporting = true }, onComplete = { isExporting = false })
                         },
-                        onPlay = { file -> onPlay(file) }
+                        onExportBvh = { f ->
+                            shareMocapFile(context, f, "bvh", onStart = { isExporting = true }, onComplete = { isExporting = false })
+                        }
                     )
                 }
             }
@@ -241,32 +207,17 @@ fun FileItem(
     panelBg: Color,
     onDelete: (File) -> Unit,
     onRename: (File) -> Unit,
-    onShare: (File) -> Unit,
-    onPlay: (File) -> Unit = {}
+    onPlay: (File) -> Unit,
+    onExportJson: (File) -> Unit,
+    onExportBvh: (File) -> Unit
 ) {
     val sdf = SimpleDateFormat("MMM dd, yyyy HH:mm", Locale.getDefault())
     val date = sdf.format(Date(file.lastModified()))
     val sizeKb = file.length() / 1024
     
-    var isFaceTracking by remember { mutableStateOf(false) }
-    LaunchedEffect(file) {
-        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            try {
-                val reader = java.io.FileReader(file)
-                val chars = CharArray(500)
-                val readChars = reader.read(chars)
-                reader.close()
-                if (readChars > 0) {
-                    val header = String(chars, 0, readChars)
-                    if (header.contains("\"tracking_mode\":\"FACE\"")) {
-                        isFaceTracking = true
-                    }
-                }
-            } catch(e: Exception) {}
-        }
-    }
+    val isFaceTracking = file.name.startsWith("face_")
 
-    Row(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
@@ -276,48 +227,94 @@ fun FileItem(
                 RoundedCornerShape(16.dp)
             )
             .clickable { onPlay(file) }
-            .padding(16.dp),
-        verticalAlignment = Alignment.CenterVertically
+            .padding(16.dp)
     ) {
-        Box(
-            modifier = Modifier.size(44.dp).background(if (isFaceTracking) Color(0xFFFF2A55).copy(alpha=0.15f) else accentBlue.copy(alpha=0.15f), RoundedCornerShape(12.dp)),
-            contentAlignment = Alignment.Center
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(
-                imageVector = if (isFaceTracking) Icons.Default.Face else Icons.Default.Accessibility, 
-                contentDescription = null, 
-                tint = if (isFaceTracking) Color(0xFFFF2A55) else accentBlue,
-                modifier = Modifier.size(24.dp)
-            )
-        }
-        Spacer(modifier = Modifier.width(16.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = file.name,
-                color = textLight,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(text = date, color = textLight.copy(alpha = 0.5f), fontSize = 12.sp)
-                Spacer(modifier = Modifier.width(8.dp))
-                Box(modifier = Modifier.size(3.dp).background(textLight.copy(alpha = 0.5f), CircleShape))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(text = "${sizeKb} KB", color = textLight.copy(alpha = 0.5f), fontSize = 12.sp)
+            Box(
+                modifier = Modifier.size(44.dp).background(accentBlue.copy(alpha=0.15f), RoundedCornerShape(12.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = if (isFaceTracking) Icons.Default.Face else Icons.Default.Accessibility, 
+                    contentDescription = null, 
+                    tint = accentBlue,
+                    modifier = Modifier.size(24.dp)
+                )
+            }
+            Spacer(modifier = Modifier.width(16.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = file.nameWithoutExtension,
+                    color = textLight,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(text = date, color = textLight.copy(alpha = 0.5f), fontSize = 12.sp)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Box(modifier = Modifier.size(3.dp).background(textLight.copy(alpha = 0.5f), CircleShape))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(text = "${sizeKb} KB", color = textLight.copy(alpha = 0.5f), fontSize = 12.sp)
+                }
+            }
+            
+            Row {
+                IconButton(onClick = { onRename(file) }) {
+                    Icon(Icons.Default.Edit, contentDescription = "Rename", tint = textLight.copy(alpha = 0.7f))
+                }
+                IconButton(onClick = { onDelete(file) }) {
+                    Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color.Red.copy(alpha = 0.8f))
+                }
             }
         }
         
-        Row {
-            IconButton(onClick = { onShare(file) }) {
-                Icon(Icons.Default.Share, contentDescription = "Share", tint = textLight.copy(alpha = 0.7f))
+        Spacer(modifier = Modifier.height(12.dp))
+        
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            val compactPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+            val compactText = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+            // 1. Play Button (Always visible)
+            Button(
+                onClick = { onPlay(file) },
+                colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = accentBlue),
+                shape = RoundedCornerShape(8.dp),
+                contentPadding = compactPadding
+            ) {
+                Text("Play", style = compactText, color = Color.Black)
             }
-            IconButton(onClick = { onRename(file) }) {
-                Icon(Icons.Default.Edit, contentDescription = "Rename", tint = textLight.copy(alpha = 0.7f))
-            }
-            IconButton(onClick = { onDelete(file) }) {
-                Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color.Red.copy(alpha = 0.8f))
+            
+            // 2. Dynamic Export Button
+            if (isFaceTracking) {
+                // Face Tracking relies on JSON for the 52 Blendshapes
+                androidx.compose.material3.OutlinedButton(
+                    onClick = { onExportJson(file) },
+                    colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(contentColor = accentBlue),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, accentBlue.copy(alpha=0.5f)),
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = compactPadding
+                ) {
+                    Text("Export Blendshapes (.JSON)", style = compactText)
+                }
+            } else {
+                // Body Tracking gives them the industry standard
+                androidx.compose.material3.OutlinedButton(
+                    onClick = { onExportBvh(file) },
+                    colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(contentColor = accentBlue),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, accentBlue.copy(alpha=0.5f)),
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = compactPadding
+                ) {
+                    Text("Export MoCap (.BVH)", style = compactText)
+                }
             }
         }
     }

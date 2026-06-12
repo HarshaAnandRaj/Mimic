@@ -75,21 +75,34 @@ class AudioVisemeAnalyzer {
             val read = audioRecord?.read(buffer, 0, buffer.size) ?: 0
             if (read > 0) {
                 var sum = 0.0
+                var crossings = 0
                 for (i in 0 until read) {
                     sum += abs(buffer[i].toDouble())
+                    if (i > 0) {
+                        if ((buffer[i - 1] > 0 && buffer[i] < 0) || (buffer[i - 1] < 0 && buffer[i] > 0)) {
+                            crossings++
+                        }
+                    }
                 }
                 val avg = sum / read
                 
-                // Very basic amplitude mapping to mouth shapes.
-                // A higher amplitude opens the mouth more (A).
-                // A rounded/lower frequency might map to (O), but we approximate it mathematically here.
+                // Zero Crossing Rate
+                val zcr = crossings.toFloat() / read.toFloat()
+                
+                // Amplitude to DB
                 val db = if (avg > 0) 20 * log10(avg) else 0.0
                 
-                // Approximate A (Ah) - Open mouth
+                // A higher amplitude opens the mouth more (JawOpen).
                 var valA = ((db - 40) / 40).coerceIn(0.0, 1.0).toFloat()
                 
-                // Approximate O (Oh) - Pursed lips
-                var valO = ((db - 30) / 40).coerceIn(0.0, 0.5).toFloat()
+                // O (MouthPucker) uses lower frequencies, meaning lower ZCR. 
+                // We boost 'O' if amplitude is high but ZCR is low.
+                var valO = 0f
+                if (valA > 0.1f) {
+                    // Typical ZCR for speech is 0.05 to 0.3. 
+                    // Let's say ZCR < 0.1 is 'O' or 'U' (low freq formants), ZCR > 0.15 is 'A' or 'E'
+                    valO = ((0.15f - zcr) / 0.1f).coerceIn(0.0f, 1.0f) * valA
+                }
                 
                 _visemeA.value = valA
                 _visemeO.value = valO

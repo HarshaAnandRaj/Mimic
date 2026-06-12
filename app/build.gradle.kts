@@ -14,8 +14,8 @@ android {
     applicationId = "com.aistudio.mocap.abxyzt"
     minSdk = 24
     targetSdk = 36
-    versionCode = 11
-    versionName = "11.0"
+    versionCode = 30
+    versionName = "30.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -56,6 +56,10 @@ android {
     buildConfig = true
   }
   testOptions { unitTests { isIncludeAndroidResources = true } }
+  
+  androidResources {
+    noCompress += "task"
+  }
 }
 
 // Configure the Secrets Gradle Plugin to use .env and .env.example files
@@ -96,7 +100,7 @@ dependencies {
   // implementation(libs.firebase.ai)
   implementation(libs.mlkit.pose.detection)
   implementation(libs.mlkit.pose.detection.accurate)
-  implementation("com.google.mlkit:face-mesh-detection:16.0.0-beta3")
+  implementation(libs.mediapipe.tasks.vision)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
   // implementation(libs.logging.interceptor)

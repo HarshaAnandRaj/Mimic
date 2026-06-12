@@ -1,5 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
+    <!-- Your existing paths -->
     <external-path name="external_files" path="." />
     <external-dir-path name="external_downloads" path="Download" />
+
+    <!-- FIX 1: Allow sharing the JSON files from app-specific external storage -->
+    <external-files-path name="external_app_files" path="." />
+
+    <!-- FIX 2: Allow sharing the BVH files from the internal Cache directory! -->
+    <cache-path name="cached_exports" path="exports/" />
 </paths>

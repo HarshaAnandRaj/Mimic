@@ -26,43 +26,62 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.text.font.FontFamily
 
 data class ParsedLandmark(val id: Int, val x: Float, val y: Float, val visibility: Float)
+data class ParsedFrame(val timestamp: Double, val landmarks: List<ParsedLandmark>)
+
+data class PlaybackMetadata(
+    var isFaceData: Boolean = false,
+    var imageWidth: Int = 0,
+    var imageHeight: Int = 0,
+    var isFrontCamera: Boolean = true,
+    var minX: Float = Float.MAX_VALUE,
+    var maxX: Float = Float.MIN_VALUE,
+    var minY: Float = Float.MAX_VALUE,
+    var maxY: Float = Float.MIN_VALUE
+)
 
 @Composable
 fun PlaybackScreen(modifier: Modifier = Modifier, file: File, onNavigateBack: () -> Unit) {
     val bgDark = Color(0xFF1A1C1E)
     val accentBlue = Color(0xFFD0E4FF)
     
-    var frames by remember { mutableStateOf<List<List<ParsedLandmark>>?>(null) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    var frames by remember { mutableStateOf<List<ParsedFrame>?>(null) }
+    var metadata by remember { mutableStateOf(PlaybackMetadata()) }
     var currentFrameIndex by remember { mutableStateOf(0) }
     var isPlaying by remember { mutableStateOf(false) }
-    var isFaceData by remember { mutableStateOf(false) }
     var showControls by remember { mutableStateOf(true) }
+    var playbackSpeed by remember { mutableStateOf(1f) }
 
     LaunchedEffect(file) {
         if (file.exists() && file.extension == "json") {
             try {
                 val parsedData = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                    val result = mutableListOf<List<ParsedLandmark>>()
-                    var detectedFaceData = false
+                    val result = mutableListOf<ParsedFrame>()
+                    val parsedMetadata = PlaybackMetadata()
                     
                     val reader = android.util.JsonReader(java.io.FileReader(file))
                     reader.beginArray()
                     while (reader.hasNext()) {
                         reader.beginObject()
                         val frameLandmarks = mutableListOf<ParsedLandmark>()
+                        var timestamp = 0.0
                         while (reader.hasNext()) {
                             val name = reader.nextName()
                             when (name) {
+                                "timestamp" -> timestamp = reader.nextDouble()
                                 "type" -> {
                                     if (reader.nextString() == "metadata") {
-                                        // Metadata block
+                                        // inside metadata
                                     }
                                 }
                                 "tracking_mode" -> {
                                     if (reader.nextString() == "FACE") {
-                                        detectedFaceData = true
+                                        parsedMetadata.isFaceData = true
                                     }
                                 }
+                                "image_width" -> parsedMetadata.imageWidth = reader.nextInt()
+                                "image_height" -> parsedMetadata.imageHeight = reader.nextInt()
+                                "is_front_camera" -> parsedMetadata.isFrontCamera = reader.nextBoolean()
                                 "landmarks" -> {
                                     reader.beginArray()
                                     while (reader.hasNext()) {
@@ -83,37 +102,53 @@ fun PlaybackScreen(modifier: Modifier = Modifier, file: File, onNavigateBack: ()
                                         }
                                         reader.endObject()
                                         frameLandmarks.add(ParsedLandmark(id, x, y, visibility))
+                                        
+                                        if (visibility > 0) {
+                                            if (x < parsedMetadata.minX) parsedMetadata.minX = x
+                                            if (x > parsedMetadata.maxX) parsedMetadata.maxX = x
+                                            if (y < parsedMetadata.minY) parsedMetadata.minY = y
+                                            if (y > parsedMetadata.maxY) parsedMetadata.maxY = y
+                                        }
                                     }
                                     reader.endArray()
                                 }
+                                "blendshapes" -> reader.skipValue()
                                 else -> reader.skipValue()
                             }
                         }
                         reader.endObject()
                         if (frameLandmarks.isNotEmpty()) {
-                            result.add(frameLandmarks)
+                            result.add(ParsedFrame(timestamp, frameLandmarks))
                         }
                     }
                     reader.endArray()
                     reader.close()
                     
-                    Pair(result, detectedFaceData)
+                    Pair(result, parsedMetadata)
                 }
                 frames = parsedData.first
-                isFaceData = parsedData.second
+                metadata = parsedData.second
             } catch (e: Exception) {
                 e.printStackTrace()
+                errorMessage = "Failed to load file. It may be corrupted."
             }
         }
     }
 
-    LaunchedEffect(isPlaying, currentFrameIndex, frames) {
+    LaunchedEffect(isPlaying, frames) {
         if (isPlaying && frames != null) {
-            val totalFrames = frames!!.size
-            if (currentFrameIndex < totalFrames - 1) {
-                delay(33L) // Roughly 30fps
+            while (currentFrameIndex < frames!!.size - 1 && isPlaying) {
+                val currentFrame = frames!![currentFrameIndex]
+                val nextFrame = frames!![currentFrameIndex + 1]
+                var delayMs = ((nextFrame.timestamp - currentFrame.timestamp) * 1000).toLong()
+                
+                // Clamp delay to avoid freezing on dropped frames or rushing
+                delayMs = delayMs.coerceIn(16L, 250L) 
+                
+                delay((delayMs / playbackSpeed).toLong())
                 currentFrameIndex++
-            } else {
+            }
+            if (currentFrameIndex >= frames!!.size - 1) {
                 isPlaying = false
             }
         }
@@ -145,7 +180,7 @@ fun PlaybackScreen(modifier: Modifier = Modifier, file: File, onNavigateBack: ()
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
                 }
                 Text(
-                    text = "Viewing: ${file.name}",
+                    text = "Viewing: ${file.nameWithoutExtension}",
                     color = Color.White,
                     fontSize = 18.sp,
                     maxLines = 1,
@@ -155,7 +190,9 @@ fun PlaybackScreen(modifier: Modifier = Modifier, file: File, onNavigateBack: ()
         }
 
         Box(modifier = Modifier.weight(1f).fillMaxWidth().background(Color.Black), contentAlignment = Alignment.Center) {
-            if (frames == null) {
+            if (errorMessage != null) {
+                Text(text = errorMessage!!, color = Color.Red, fontWeight = FontWeight.Bold)
+            } else if (frames == null) {
                 if (file.extension == "bvh") {
                     Text(text = "BVH playback not supported yet.", color = Color.Gray)
                 } else {
@@ -164,7 +201,8 @@ fun PlaybackScreen(modifier: Modifier = Modifier, file: File, onNavigateBack: ()
             } else if (frames!!.isNotEmpty()) {
                 val frameList = frames!!
                 if (currentFrameIndex < frameList.size) {
-                    val frameLandmarks = frameList[currentFrameIndex]
+                    val frameLandmarks = frameList[currentFrameIndex].landmarks
+                    val isFace = metadata.isFaceData
                     
                     Canvas(modifier = Modifier.fillMaxSize()) {
                         val mappedPoints = mutableMapOf<Int, Offset>()
@@ -173,23 +211,40 @@ fun PlaybackScreen(modifier: Modifier = Modifier, file: File, onNavigateBack: ()
                         // Pass 1: map points
                         for (lm in frameLandmarks) {
                             val id = lm.id
-                            val x = lm.x
-                            val y = lm.y
+                            var x = lm.x
+                            var y = lm.y
                             val visibility = lm.visibility
                             
                             visibilities[id] = visibility
                             
                             if (visibility > 0.0f) {
-                                // Dynamic scale guessing. Typical capture is 720 width, 1280 height. Just fit vertically
-                                val scale = size.height / 1280f
-                                val cx = size.width/2f + (x - 360f) * scale
-                                val cy = (y * scale)
+                                // If imageWidth/Height is provided, use it. Otherwise, use min/max bounds.
+                                val iw = if (metadata.imageWidth > 0) metadata.imageWidth.toFloat() else (metadata.maxX - metadata.minX)
+                                val ih = if (metadata.imageHeight > 0) metadata.imageHeight.toFloat() else (metadata.maxY - metadata.minY)
+                                val wX = if (metadata.imageWidth > 0) x else (x - metadata.minX)
+                                val wY = if (metadata.imageHeight > 0) y else (y - metadata.minY)
+                                
+                                val safeW = if (iw > 0) iw else 1f
+                                val safeH = if (ih > 0) ih else 1f
+                                
+                                // Calculate scale to fit canvas width or height depending on aspect ratio
+                                val scale = minOf(size.width / safeW, size.height / safeH)
+                                
+                                // Center the mapped rect in the canvas
+                                val xOffset = (size.width - (safeW * scale)) / 2f
+                                val yOffset = (size.height - (safeH * scale)) / 2f
+                                
+                                // Front camera needs mirroring logically, but the points are usually already mirrored in MLKit space if mapped correctly
+                                // Actually, we'll just plot them as-is.
+                                val cx = xOffset + wX * scale
+                                val cy = yOffset + wY * scale
+                                
                                 mappedPoints[id] = Offset(cx, cy)
                             }
                         }
                         
                         // Draw Bones
-                        if (!isFaceData) {
+                        if (!isFace) {
                             connections.forEach { (a, b) ->
                                 val ptA = mappedPoints[a]
                                 val ptB = mappedPoints[b]
@@ -219,7 +274,7 @@ fun PlaybackScreen(modifier: Modifier = Modifier, file: File, onNavigateBack: ()
                                 visibility > 0.3f -> Color.Red
                                 else -> Color.Gray
                             }
-                            val radius = if (isFaceData) 2f else if (visibility > 0.3f) 6f else 4f
+                            val radius = if (isFace) 2f else if (visibility > 0.3f) 6f else 4f
                             drawCircle(color, radius = radius, center = offset)
                         }
                     }
@@ -265,6 +320,20 @@ fun PlaybackScreen(modifier: Modifier = Modifier, file: File, onNavigateBack: ()
                             activeTrackColor = accentBlue.copy(alpha = 0.7f),
                             inactiveTrackColor = Color.White.copy(alpha = 0.2f)
                         )
+                    )
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Text(
+                        text = "${playbackSpeed}x",
+                        color = accentBlue,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp,
+                        modifier = Modifier.clickable {
+                            playbackSpeed = when (playbackSpeed) {
+                                1f -> 2f
+                                2f -> 0.5f
+                                else -> 1f
+                            }
+                        }.padding(8.dp)
                     )
                 }
             }

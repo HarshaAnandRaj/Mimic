@@ -5,12 +5,12 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 
 private val MimicColorScheme = darkColorScheme(
-    primary = AccentCyan,
-    secondary = AccentCrimson,
+    primary = PrimaryWhite,
+    secondary = SecondaryGray,
     background = DarkBackground,
     surface = DarkSurface,
     onPrimary = DarkBackground,
-    onSecondary = TextWhite,
+    onSecondary = DarkBackground,
     onBackground = TextWhite,
     onSurface = TextWhite
 )

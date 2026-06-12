@@ -19,6 +19,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 fun shareMocapFile(context: Context, file: File, format: String, onStart: () -> Unit = {}, onComplete: () -> Unit = {}) {
+    if (file.length() == 0L) {
+        android.widget.Toast.makeText(context, "Error: File is empty or corrupted.", android.widget.Toast.LENGTH_LONG).show()
+        onComplete()
+        return
+    }
+
     val activity = context as? Activity
     if (activity != null) {
         AlertDialog.Builder(activity)
@@ -77,8 +83,18 @@ private fun loadAndShowAd(context: Context, file: File, format: String, onStart:
 
 private fun performExport(context: Context, file: File, format: String, onComplete: () -> Unit) {
     CoroutineScope(Dispatchers.IO).launch {
-        val fileToShare = if (format == "bvh" && file.extension == "json") {
-            val bvhFile = File(file.parentFile, file.nameWithoutExtension + ".bvh")
+        val urisToShare = ArrayList<android.net.Uri>()
+        val providerAuth = "${context.packageName}.fileprovider"
+        // 1. Add JSON if requested
+        if (format == "json" || format == "both") {
+            urisToShare.add(FileProvider.getUriForFile(context, providerAuth, file))
+        }
+        // 2. Generate and Add BVH if requested
+        if ((format == "bvh" || format == "both") && file.extension == "json") {
+            val exportDir = File(context.cacheDir, "exports")
+            if (!exportDir.exists()) exportDir.mkdirs()
+            val bvhFile = File(exportDir, file.nameWithoutExtension + ".bvh")
+            
             if (!bvhFile.exists()) {
                 try {
                     BvhExporter().export(file, bvhFile)
@@ -86,19 +102,22 @@ private fun performExport(context: Context, file: File, format: String, onComple
                     bvhFile.writeText("ERROR parsing JSON for BVH: ${e.message}")
                 }
             }
-            bvhFile
-        } else {
-            file
+            urisToShare.add(FileProvider.getUriForFile(context, providerAuth, bvhFile))
         }
-
+        // 3. Trigger the Share Sheet
         withContext(Dispatchers.Main) {
-            val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", fileToShare)
-            val shareIntent = Intent().apply {
-                action = Intent.ACTION_SEND
-                putExtra(Intent.EXTRA_STREAM, uri)
-                type = if (fileToShare.extension == "json") "application/json" else "application/octet-stream"
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            val shareIntent = if (urisToShare.size == 1) {
+                Intent(Intent.ACTION_SEND).apply {
+                    putExtra(Intent.EXTRA_STREAM, urisToShare.first())
+                    type = if (format == "json") "application/json" else "application/octet-stream"
+                }
+            } else {
+                Intent(Intent.ACTION_SEND_MULTIPLE).apply { // Allows multiple files
+                    putParcelableArrayListExtra(Intent.EXTRA_STREAM, urisToShare)
+                    type = "*/*"
+                }
             }
+            shareIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             context.startActivity(Intent.createChooser(shareIntent, "Share MoCap Data"))
             onComplete()
         }

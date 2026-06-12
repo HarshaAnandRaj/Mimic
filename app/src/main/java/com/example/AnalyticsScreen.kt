@@ -35,7 +35,7 @@ fun AnalyticsScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Un
     val panelBg = Color(0xFF2D2F31)
 
     val downloadsDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
-    val files = downloadsDir?.listFiles()?.toList()?.filter { it.extension == "json" || it.extension == "bvh" } ?: emptyList()
+    val files = downloadsDir?.listFiles()?.toList()?.filter { it.extension == "json" } ?: emptyList()
 
     val totalFiles = files.size
     val totalSizeKb = files.sumOf { it.length() } / 1024

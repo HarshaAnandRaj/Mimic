@@ -48,22 +48,47 @@ class PoseRecorder(private val context: Context) {
     private val calibratedBoneLengths = mutableMapOf<Pair<Int, Int>, Float>()
     private var floorPlaneY = Float.MIN_VALUE
     private var calibratedTPoseJson: org.json.JSONArray? = null
+    private val calibrationLock = Any()
+    
+    private val calibrationAccumulator = mutableMapOf<Int, FloatArray>()
+    private var calibrationFramesAccumulated = 0
 
-    fun calibrate(pose: Pose) {
-        val positions = mutableMapOf<Int, FloatArray>()
-        calibratedTPoseJson = org.json.JSONArray()
+    fun accumulateCalibration(pose: SmoothedPose) {
         pose.allPoseLandmarks.forEach { landmark ->
             val id = landmark.landmarkType
             if (id >= 33) return@forEach
-            var posX = landmark.position.x
-            var posY = landmark.position.y
-            var posZ = 0.0f
-            try {
-                val p3d = landmark.javaClass.getMethod("getPosition3D").invoke(landmark)
-                posZ = p3d.javaClass.getMethod("getZ").invoke(p3d) as Float
-                posX = p3d.javaClass.getMethod("getX").invoke(p3d) as Float
-                posY = p3d.javaClass.getMethod("getY").invoke(p3d) as Float
-            } catch (e: Exception) {}
+            
+            var posX = landmark.x
+            var posY = landmark.y
+            var posZ = landmark.z
+            
+            if (calibrationFramesAccumulated == 0 && id == 0) {
+                calibrationAccumulator.clear()
+            }
+            
+            val acc = calibrationAccumulator.getOrPut(id) { FloatArray(3) }
+            acc[0] += posX
+            acc[1] += posY
+            acc[2] += posZ
+        }
+        if (pose.allPoseLandmarks.isNotEmpty()) {
+            calibrationFramesAccumulated++
+        }
+    }
+
+    fun finalizeCalibration() {
+        if (calibrationFramesAccumulated == 0) return
+        
+        floorPlaneY = Float.MIN_VALUE
+        val positions = mutableMapOf<Int, FloatArray>()
+        
+        val tempJsonArray = org.json.JSONArray()
+
+        for (id in 0 until 33) {
+            val acc = calibrationAccumulator[id] ?: continue
+            val posX = acc[0] / calibrationFramesAccumulated
+            val posY = acc[1] / calibrationFramesAccumulated
+            val posZ = acc[2] / calibrationFramesAccumulated
             
             positions[id] = floatArrayOf(posX, posY, posZ)
             
@@ -72,16 +97,18 @@ class PoseRecorder(private val context: Context) {
             lmJson.put("x", posX)
             lmJson.put("y", posY)
             lmJson.put("z", posZ)
-            lmJson.put("visibility", landmark.inFrameLikelihood)
-            calibratedTPoseJson?.put(lmJson)
+            lmJson.put("visibility", 1.0)
+            tempJsonArray.put(lmJson)
             
-            // Floor plane analysis. 
-            // In MLKit, Y is downwards, so the floor is the maximum Y value.
             if (id in 27..32) {
                 if (posY > floorPlaneY) {
                     floorPlaneY = posY
                 }
             }
+        }
+
+        synchronized(calibrationLock) {
+            calibratedTPoseJson = tempJsonArray
         }
         
         for (pair in bonePairs) {
@@ -95,13 +122,22 @@ class PoseRecorder(private val context: Context) {
                 calibratedBoneLengths[pair] = dist
             }
         }
+        
+        // Reset
+        calibrationAccumulator.clear()
+        calibrationFramesAccumulated = 0
+    }
+
+    fun calibrate(pose: SmoothedPose) {
+        accumulateCalibration(pose)
+        finalizeCalibration()
     }
 
     fun setDeviceGravity(gravity: FloatArray) {
         deviceGravity = gravity.clone()
     }
 
-    fun startRecording() {
+    fun startRecording(imageWidth: Int, imageHeight: Int, isFrontCamera: Boolean) {
         frameCount = 0
         totalConf = 0f
         lowConfFrames = 0
@@ -122,6 +158,9 @@ class PoseRecorder(private val context: Context) {
             // Metadata frame
             jsonWriter?.beginObject()
             jsonWriter?.name("type")?.value("metadata")
+            jsonWriter?.name("image_width")?.value(imageWidth)
+            jsonWriter?.name("image_height")?.value(imageHeight)
+            jsonWriter?.name("is_front_camera")?.value(isFrontCamera)
             
             deviceGravity?.let {
                 jsonWriter?.name("device_gravity_vector")
@@ -131,24 +170,23 @@ class PoseRecorder(private val context: Context) {
                 jsonWriter?.value(it[2])
                 jsonWriter?.endArray()
             }
-            if (calibratedTPoseJson != null) {
-                // Since calibratedTPoseJson is org.json.JSONArray, write it as a raw string inside our JSON?
-                // Wait, JsonWriter doesn't easily append raw JSON strings except by manually parsing or using .value().
-                // Let's just iterate through calibratedTPoseJson to write proper JSON, or leave it as string.
-                // Actually parse the JSONArray back.
-                jsonWriter?.name("tpose")
-                jsonWriter?.beginArray()
-                for (i in 0 until calibratedTPoseJson!!.length()) {
-                    val lmJson = calibratedTPoseJson!!.getJSONObject(i)
-                    jsonWriter?.beginObject()
-                    if (lmJson.has("id")) jsonWriter?.name("id")?.value(lmJson.getInt("id"))
-                    if (lmJson.has("x")) jsonWriter?.name("x")?.value(lmJson.getDouble("x"))
-                    if (lmJson.has("y")) jsonWriter?.name("y")?.value(lmJson.getDouble("y"))
-                    if (lmJson.has("z")) jsonWriter?.name("z")?.value(lmJson.getDouble("z"))
-                    if (lmJson.has("visibility")) jsonWriter?.name("visibility")?.value(lmJson.getDouble("visibility"))
-                    jsonWriter?.endObject()
+            
+            synchronized(calibrationLock) {
+                if (calibratedTPoseJson != null) {
+                    jsonWriter?.name("tpose")
+                    jsonWriter?.beginArray()
+                    for (i in 0 until calibratedTPoseJson!!.length()) {
+                        val lmJson = calibratedTPoseJson!!.getJSONObject(i)
+                        jsonWriter?.beginObject()
+                        if (lmJson.has("id")) jsonWriter?.name("id")?.value(lmJson.getInt("id"))
+                        if (lmJson.has("x")) jsonWriter?.name("x")?.value(lmJson.getDouble("x"))
+                        if (lmJson.has("y")) jsonWriter?.name("y")?.value(lmJson.getDouble("y"))
+                        if (lmJson.has("z")) jsonWriter?.name("z")?.value(lmJson.getDouble("z"))
+                        if (lmJson.has("visibility")) jsonWriter?.name("visibility")?.value(lmJson.getDouble("visibility"))
+                        jsonWriter?.endObject()
+                    }
+                    jsonWriter?.endArray()
                 }
-                jsonWriter?.endArray()
             }
             jsonWriter?.endObject()
             
@@ -171,6 +209,7 @@ class PoseRecorder(private val context: Context) {
             try {
                 jsonWriter?.close()
                 jsonWriter = null
+                currentFile?.delete()
             } catch (ignored: Exception) {}
             return null
         }
@@ -188,7 +227,7 @@ class PoseRecorder(private val context: Context) {
         }
     }
 
-    fun recordFrame(pose: Pose) {
+    fun recordFrame(pose: SmoothedPose) {
         if (!isRecording) return
 
         val currentTime = System.currentTimeMillis()
@@ -205,16 +244,9 @@ class PoseRecorder(private val context: Context) {
             val id = landmark.landmarkType
             if (id >= 33) return@forEach
             
-            var posX = landmark.position.x
-            var posY = landmark.position.y
-            var posZ = 0.0f
-            
-            try {
-                val p3d = landmark.javaClass.getMethod("getPosition3D").invoke(landmark)
-                posZ = p3d.javaClass.getMethod("getZ").invoke(p3d) as Float
-                posX = p3d.javaClass.getMethod("getX").invoke(p3d) as Float
-                posY = p3d.javaClass.getMethod("getY").invoke(p3d) as Float
-            } catch (e: Exception) {}
+            var posX = landmark.x
+            var posY = landmark.y
+            var posZ = landmark.z
             
             var confidence = landmark.inFrameLikelihood
             
@@ -252,6 +284,7 @@ class PoseRecorder(private val context: Context) {
             }
 
             // 4. Kalman Update
+            val Q = if (id in listOf(15, 16, 27, 28, 31, 32)) 5.0f else if (id in 0..10 || id == 23 || id == 24) 0.1f else 0.5f // Ankles/Wrists move fast, Face/Hips move smooth
             val R = 1.0f / (confidence.coerceAtLeast(0.001f) * 10f)
             tempMeasures[0] = posX
             tempMeasures[1] = posY
@@ -264,7 +297,7 @@ class PoseRecorder(private val context: Context) {
                 // Predict with slight velocity damping
                 var dampedV = state.v * 0.95f
                 val predP = state.p + dampedV * dt
-                val predCov = state.cov + 0.5f // Process noise Q
+                val predCov = state.cov + Q // Adaptive Process noise Q
                 
                 // Update
                 val K = predCov / (predCov + R)
@@ -437,6 +470,9 @@ class PoseRecorder(private val context: Context) {
             }
         } catch (e: Exception) {
             e.printStackTrace()
+            isRecording = false
+            try { jsonWriter?.close() } catch (ignored: Exception) {}
+            jsonWriter = null
         }
         
         frameCount++

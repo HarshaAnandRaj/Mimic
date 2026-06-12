@@ -70,8 +70,9 @@
         <p>Mimic requires the following permissions to operate properly:</p>
         <ul>
             <li><strong>Camera:</strong> Strictly for optical motion and facial capture.</li>
+            <li><strong>Microphone / Record Audio:</strong> Used exclusively for local lip-sync viseme extraction. The audio feed is analyzed mathematically on-device to create mouth shapes and is never recorded or transmitted.</li>
             <li><strong>Storage:</strong> To save your recorded animation files (BVH/JSON).</li>
-            <li><strong>Network / Internet:</strong> To load advertisements and verify ad network connectivity.</li>
+            <li><strong>Network / Internet:</strong> Used for local-network UDP transmission (VMC OSC broadcast to your desktop), to load advertisements, and to verify ad network connectivity. No tracking or payload data leaves your private LAN via our engine.</li>
         </ul>
 
         <h2>6. Third-Party Services</h2>

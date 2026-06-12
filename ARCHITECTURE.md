@@ -73,9 +73,9 @@ Human joints move within set biological boundaries. The engine calculates local 
 
 The application uses the hardware gravity sensor to define an absolute floor plane based on the anchor positions (ankles/heels) captured during the T-pose calibration. If chaotic AI tracking guesses a foot has sunk below this plane, the vertical axis is hard-clamped, preventing the character from ever sinking underground.
 
-### Rule 4: Dynamic Velocity Clamping (The Blur Ceiling)
+### Rule 4: Reinforcement Learning (Q-Table Filter)
 
-Human joints have a hard physical acceleration limit. If a blurred frame causes a tracking coordinate to jump wildly (implying an anatomically impossible speed), the velocity gate intercepts the value, truncates the displacement to the maximum allowable human limit, and smoothly glides the bone along its restricted trajectory.
+To solve the mathematical dilemma of motion blur during high-speed actions (like a punch), the system utilizes an onboard Q-Learning Reinforcement Learning agent per dynamic joint (wrists and ankles). The `FilterRlAgent` evaluates pixel velocity and constructs a 3x3 table to shift the `beta` responsiveness parameter of the One-Euro mathematical filter dynamically. When the velocity is low, it heavily restricts the beta to brutally crush jitter. The moment velocity exponentially increases, the AI agent unlocks the beta, allowing explosive physical movements to snap instantly into place.
 
 ### Rule 5: Kalman Filtering (Predictive Smoothing)
 

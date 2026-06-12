@@ -13,9 +13,10 @@ import com.google.mlkit.vision.pose.PoseLandmark
 
 @Composable
 fun PoseOverlay(
-    pose: Pose?,
+    pose: SmoothedPose?,
     imageWidth: Int,
     imageHeight: Int,
+    isFrontCamera: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     Canvas(modifier = modifier.fillMaxSize()) {
@@ -27,40 +28,58 @@ fun PoseOverlay(
         val offsetX = (size.width - imageWidth * scale) / 2f
         val offsetY = (size.height - imageHeight * scale) / 2f
 
-        fun translateX(x: Float): Float = x * scale + offsetX
+        fun translateX(x: Float): Float {
+            val rawX = x * scale + offsetX
+            return if (isFrontCamera) size.width - rawX else rawX
+        }
         fun translateY(y: Float): Float = y * scale + offsetY
 
         fun getConfidenceColor(confidence: Float): Color {
             return when {
-                confidence > 0.75f -> Color.Green
-                confidence > 0.4f -> Color.Yellow
-                else -> Color.Red
+                confidence > 0.75f -> Color.White // High confidence
+                confidence > 0.4f -> Color.White.copy(alpha = 0.5f)  // Medium confidence
+                else -> Color.White.copy(alpha = 0.2f) // Low confidence
             }
         }
 
-        fun drawLineOrEmpty(start: PoseLandmark?, end: PoseLandmark?) {
+        fun drawLineOrEmpty(start: SmoothedPoseLandmark?, end: SmoothedPoseLandmark?) {
             if (start != null && end != null) {
                 // If either is very low confidence, don't draw or draw faint red
                 if (start.inFrameLikelihood < 0.2f || end.inFrameLikelihood < 0.2f) return
 
                 val avgConfidence = (start.inFrameLikelihood + end.inFrameLikelihood) / 2f
-                val color = getConfidenceColor(avgConfidence).copy(alpha = 0.8f)
+                val color = getConfidenceColor(avgConfidence)
 
+                // Glow Path
+                drawLine(
+                    color = color.copy(alpha = 0.3f),
+                    start = Offset(translateX(start.x), translateY(start.y)),
+                    end = Offset(translateX(end.x), translateY(end.y)),
+                    strokeWidth = 14f
+                )
+                
+                // Core Path
                 drawLine(
                     color = color,
-                    start = Offset(translateX(start.position.x), translateY(start.position.y)),
-                    end = Offset(translateX(end.position.x), translateY(end.position.y)),
-                    strokeWidth = 5f
+                    start = Offset(translateX(start.x), translateY(start.y)),
+                    end = Offset(translateX(end.x), translateY(end.y)),
+                    strokeWidth = 4f
                 )
             }
         }
 
-        fun drawPoint(landmark: PoseLandmark?) {
+        fun drawPoint(landmark: SmoothedPoseLandmark?) {
             if (landmark != null && landmark.inFrameLikelihood > 0.2f) {
+                val color = getConfidenceColor(landmark.inFrameLikelihood)
                 drawCircle(
-                    color = getConfidenceColor(landmark.inFrameLikelihood),
-                    radius = 6f,
-                    center = Offset(translateX(landmark.position.x), translateY(landmark.position.y))
+                    color = color.copy(alpha = 0.3f),
+                    radius = 12f,
+                    center = Offset(translateX(landmark.x), translateY(landmark.y))
+                )
+                drawCircle(
+                    color = Color.White,
+                    radius = 4f,
+                    center = Offset(translateX(landmark.x), translateY(landmark.y))
                 )
             }
         }

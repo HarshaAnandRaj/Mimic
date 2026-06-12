@@ -98,4 +98,11 @@ class VmcOscSender(var targetIp: String = "192.16.16.29", var targetPort: Int = 
              }
         }
     }
+
+    fun close() {
+        try {
+            executor.shutdownNow()
+            socket?.close()
+        } catch (e: Exception) {}
+    }
 }

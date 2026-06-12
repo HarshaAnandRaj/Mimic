@@ -45,6 +45,7 @@ import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.Accessibility
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -88,8 +89,12 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.core.content.FileProvider
 import com.example.ui.theme.MyApplicationTheme
+import com.example.ui.theme.*
 import com.google.mlkit.vision.pose.Pose
 import com.google.mlkit.vision.pose.PoseLandmark
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.material.ripple.rememberRipple
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
@@ -145,6 +150,11 @@ fun MoCapApp() {
         hasAudioPermission = permissions[Manifest.permission.RECORD_AUDIO] ?: hasAudioPermission
     }
     
+    var countdownSetting by remember { mutableStateOf(prefs.getInt("countdown_setting", 5)) }
+    var autoStopSetting by remember { mutableStateOf(prefs.getInt("auto_stop_setting", 0)) }
+    var xGestureEnabled by remember { mutableStateOf(prefs.getBoolean("x_gesture_enabled", true)) }
+    var ipAddress by remember { mutableStateOf(prefs.getString("osc_ip", "192.168.1.100") ?: "192.168.1.100") }
+    
     var currentScreen by remember { mutableStateOf(if (privacyAccepted) AppScreen.Capture else AppScreen.Privacy) }
     var fileToPlay by remember { mutableStateOf<java.io.File?>(null) }
 
@@ -159,15 +169,23 @@ fun MoCapApp() {
 
     androidx.compose.material3.ModalNavigationDrawer(
         drawerState = drawerState,
-        gesturesEnabled = privacyAccepted && allPermissionsGranted && currentScreen != AppScreen.Privacy && currentScreen != AppScreen.Playback && !isRecordingSession,
+        gesturesEnabled = true, // FIX 1: Change to true so tapping the background closes it
         drawerContent = {
-            if (privacyAccepted && allPermissionsGranted && currentScreen != AppScreen.Privacy && currentScreen != AppScreen.Playback) {
-                androidx.compose.material3.ModalDrawerSheet(
-                    drawerContainerColor = bgDark,
-                    drawerContentColor = textLight
-                ) {
+            androidx.compose.material3.ModalDrawerSheet(
+                drawerContainerColor = bgDark,
+                drawerContentColor = textLight
+            ) {
+                // FIX 2: Move the IF statement INSIDE the ModalDrawerSheet
+                if (privacyAccepted && allPermissionsGranted && currentScreen != AppScreen.Privacy && currentScreen != AppScreen.Playback) {
                     Spacer(Modifier.height(16.dp))
-                    Text("Mimic PRO Menu", modifier = Modifier.padding(16.dp), color = accentBlue, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        "M I M I C   M E N U", 
+                        modifier = Modifier.padding(16.dp), 
+                        color = androidx.compose.material3.MaterialTheme.colorScheme.primary, 
+                        style = androidx.compose.material3.MaterialTheme.typography.labelLarge.copy(
+                            letterSpacing = 8.sp 
+                        )
+                    )
                     
                     var showUserManual by remember { mutableStateOf(false) }
                     if (showUserManual) {
@@ -206,6 +224,70 @@ fun MoCapApp() {
                             unselectedContainerColor = Color.Transparent
                         )
                     )
+                    Spacer(Modifier.height(16.dp))
+                    Text("TIMER OPTIONS", modifier = Modifier.padding(horizontal = 16.dp), color = textLight.copy(alpha=0.5f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    
+                    androidx.compose.material3.NavigationDrawerItem(
+                        label = { Text("Start Countdown: ${if (countdownSetting == 0) "Off" else "${countdownSetting}s"}", color = textLight) },
+                        selected = false,
+                        onClick = {
+                            countdownSetting = when (countdownSetting) {
+                                0 -> 5
+                                5 -> 10
+                                else -> 0
+                            }
+                            prefs.edit().putInt("countdown_setting", countdownSetting).apply()
+                        },
+                        icon = { Icon(Icons.Default.Settings, contentDescription = null, tint = textLight.copy(alpha = 0.7f)) },
+                        colors = androidx.compose.material3.NavigationDrawerItemDefaults.colors(unselectedContainerColor = Color.Transparent)
+                    )
+                    
+                    androidx.compose.material3.NavigationDrawerItem(
+                        label = { Text("Auto-Stop: ${if (autoStopSetting == 0) "Off" else "${autoStopSetting}s"}", color = textLight) },
+                        selected = false,
+                        onClick = {
+                            autoStopSetting = when (autoStopSetting) {
+                                0 -> 30
+                                30 -> 60
+                                else -> 0
+                            }
+                            prefs.edit().putInt("auto_stop_setting", autoStopSetting).apply()
+                        },
+                        icon = { Icon(Icons.Default.Stop, contentDescription = null, tint = textLight.copy(alpha = 0.7f)) },
+                        colors = androidx.compose.material3.NavigationDrawerItemDefaults.colors(unselectedContainerColor = Color.Transparent)
+                    )
+
+                    androidx.compose.material3.NavigationDrawerItem(
+                        label = { Text("Cross-Arm Stop: ${if (xGestureEnabled) "On" else "Off"}", color = textLight) },
+                        selected = false,
+                        onClick = {
+                            xGestureEnabled = !xGestureEnabled
+                            prefs.edit().putBoolean("x_gesture_enabled", xGestureEnabled).apply()
+                        },
+                        icon = { Icon(Icons.Default.Accessibility, contentDescription = null, tint = textLight.copy(alpha = 0.7f)) },
+                        colors = androidx.compose.material3.NavigationDrawerItemDefaults.colors(unselectedContainerColor = androidx.compose.ui.graphics.Color.Transparent)
+                    )
+                    
+                    Spacer(Modifier.height(16.dp))
+                    Text("STREAMING OPTIONS", modifier = Modifier.padding(horizontal = 16.dp), color = textLight.copy(alpha=0.5f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    androidx.compose.material3.OutlinedTextField(
+                        value = ipAddress,
+                        onValueChange = { 
+                            ipAddress = it 
+                            val isValidIp = it.matches(Regex("^([0-9]{1,3}\\.){3}[0-9]{1,3}$"))
+                            if (isValidIp) {
+                                prefs.edit().putString("osc_ip", it).apply()
+                            }
+                        },
+                        label = { Text("Target IP Address", color = textLight.copy(alpha=0.7f)) },
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp).fillMaxWidth(),
+                        colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = textLight,
+                            unfocusedTextColor = textLight,
+                            focusedBorderColor = accentBlue,
+                            unfocusedBorderColor = textLight.copy(alpha = 0.3f)
+                        )
+                    )
                 }
             }
         }
@@ -225,6 +307,9 @@ fun MoCapApp() {
             } else if (allPermissionsGranted) {
                 when (currentScreen) {
                     AppScreen.Capture -> MoCapScreen(
+                        countdownSetting = countdownSetting,
+                        autoStopSetting = autoStopSetting,
+                        xGestureEnabled = xGestureEnabled,
                         modifier = Modifier.padding(innerPadding),
                         onNavigate = { currentScreen = it },
                         onRecordingStateChange = { isRecordingSession = it },
@@ -279,10 +364,18 @@ fun MoCapApp() {
 
 
 @Composable
-fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, onRecordingStateChange: (Boolean) -> Unit = {}, onOpenDrawer: () -> Unit = {}) {
+fun MoCapScreen(
+    countdownSetting: Int = 5,
+    autoStopSetting: Int = 0,
+    xGestureEnabled: Boolean = true,
+    modifier: Modifier = Modifier, 
+    onNavigate: (AppScreen) -> Unit, 
+    onRecordingStateChange: (Boolean) -> Unit = {}, 
+    onOpenDrawer: () -> Unit = {}
+) {
     val context = LocalContext.current
-    var currentPose by remember { mutableStateOf<Pose?>(null) }
-    var currentFaceMesh by remember { mutableStateOf<com.google.mlkit.vision.facemesh.FaceMesh?>(null) }
+    var currentPose by remember { mutableStateOf<SmoothedPose?>(null) }
+    var currentFaceMesh by remember { mutableStateOf<FaceTrackingFrame?>(null) }
     var trackingMode by remember { mutableStateOf(TrackingMode.BODY) }
     var imageWidth by remember { mutableStateOf(0) }
     var imageHeight by remember { mutableStateOf(0) }
@@ -368,7 +461,7 @@ fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, 
         sensorManager.registerListener(listener, gravitySensor, SensorManager.SENSOR_DELAY_UI)
         onDispose {
             sensorManager.unregisterListener(listener)
-            toneGenerator?.release()
+            try { toneGenerator?.release() } catch (e: Exception) {}
         }
     }
     
@@ -404,16 +497,59 @@ fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, 
         fr
     }
 
+    DisposableEffect(faceRecorder) {
+        onDispose {
+            if (recorder.isRecording()) recorder.stopRecording()
+            faceRecorder.close()
+        }
+    }
+
+    fun startActiveRecording() {
+        try { toneGenerator?.startTone(ToneGenerator.TONE_CDMA_ABBR_ALERT, 500) } catch (e: Exception) {}
+        lastSavedFile = null
+        frameCount = 0
+        bufferSize = 0
+        if (trackingMode == TrackingMode.BODY) {
+            recorder.setDeviceGravity(latestGravity)
+            recorder.startRecording(imageWidth, imageHeight, isFrontCamera)
+        } else {
+            faceRecorder.startRecording(imageWidth, imageHeight, isFrontCamera)
+        }
+        isRecording = true
+        trackingState = TrackingState.RECORDING
+    }
+
+    fun stopActiveRecording() {
+        isRecording = false
+        trackingState = TrackingState.SEARCHING
+        lastSavedFile = if (trackingMode == TrackingMode.BODY) {
+            recorder.stopRecording()
+        } else {
+            faceRecorder.stopRecording()
+        }
+        showQualityScore = if (trackingMode == TrackingMode.BODY) {
+            recorder.lastSessionStats
+        } else {
+            null
+        }
+        currentDuration = 0L
+    }
+
+    androidx.activity.compose.BackHandler(enabled = isRecording) {
+        stopActiveRecording()
+        android.widget.Toast.makeText(
+            context, 
+            "Recording stopped safely before exiting.", 
+            android.widget.Toast.LENGTH_SHORT
+        ).show()
+    }
+
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_PAUSE || event == Lifecycle.Event.ON_STOP) {
                 if (isRecording) {
-                    isRecording = false
-                    val file = if (trackingMode == TrackingMode.BODY) recorder.stopRecording() else faceRecorder.stopRecording()
-                    lastSavedFile = file
-                    currentDuration = 0L
-                    showQualityScore = if (trackingMode == TrackingMode.BODY) recorder.lastSessionStats else null
+                    stopActiveRecording()
                 }
             }
         }
@@ -430,6 +566,10 @@ fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, 
             var tick = 0
             while (true) {
                 currentDuration = System.currentTimeMillis() - recordingStartTime
+                
+                if (autoStopSetting > 0 && currentDuration >= autoStopSetting * 1000L) {
+                    stopActiveRecording()
+                }
                 
                 if (tick % 20 == 0) { // Check roughly every 2 seconds
                     try {
@@ -453,22 +593,11 @@ fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, 
     
     LaunchedEffect(countdownTimer) {
         if (countdownTimer > 0) {
-            toneGenerator?.startTone(ToneGenerator.TONE_CDMA_PIP, 150)
+            try { toneGenerator?.startTone(ToneGenerator.TONE_CDMA_PIP, 150) } catch (e: Exception) {}
             kotlinx.coroutines.delay(1000)
             countdownTimer--
             if (countdownTimer == 0) {
-                toneGenerator?.startTone(ToneGenerator.TONE_CDMA_ABBR_ALERT, 500)
-                lastSavedFile = null
-                frameCount = 0
-                bufferSize = 0
-                if (trackingMode == TrackingMode.BODY) {
-                    recorder.setDeviceGravity(latestGravity)
-                    recorder.startRecording()
-                } else {
-                    faceRecorder.startRecording()
-                }
-                isRecording = true
-                trackingState = TrackingState.RECORDING
+                startActiveRecording()
             }
         }
     }
@@ -484,84 +613,103 @@ fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, 
     val textLight = androidx.compose.material3.MaterialTheme.colorScheme.onBackground
     val accentBlue = androidx.compose.material3.MaterialTheme.colorScheme.primary
     val recordRed = androidx.compose.material3.MaterialTheme.colorScheme.secondary
-    val panelBg = Color.Black.copy(alpha = 0.4f)
+    val panelBg = GlassSurface
     val btnBg = Color.White.copy(alpha = 0.1f)
 
     Column(modifier = modifier.fillMaxSize().background(bgDark)) {
         // Top App Bar
-        Row(
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(64.dp)
-                .padding(horizontal = 16.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .padding(horizontal = 16.dp)
         ) {
-            IconButton(onClick = onOpenDrawer) {
-                Icon(Icons.Default.Menu, contentDescription = "Menu", tint = accentBlue)
-            }
-            Spacer(modifier = Modifier.width(4.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "Mimic",
-                    color = accentBlue,
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    letterSpacing = (-0.5).sp
-                )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.align(Alignment.CenterStart)
+            ) {
+                IconButton(onClick = { if (!isRecording) onOpenDrawer() }) {
+                    Icon(Icons.Default.Menu, contentDescription = "Menu", tint = textLight)
+                }
                 Spacer(modifier = Modifier.width(4.dp))
-                Box(
-                    modifier = Modifier
-                        .background(accentBlue.copy(alpha = 0.2f), RoundedCornerShape(4.dp))
-                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = "PRO",
-                        color = accentBlue,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold
+                        text = "M I M I C",
+                        color = androidx.compose.material3.MaterialTheme.colorScheme.primary, // Pure White
+                        style = androidx.compose.material3.MaterialTheme.typography.labelLarge.copy(
+                            letterSpacing = 8.sp 
+                        )
                     )
                 }
             }
             
-            Spacer(modifier = Modifier.weight(1f))
-            
-            // Mode Toggle
+            // Top Right Settings
             Row(
-                modifier = Modifier
-                    .background(Color.White.copy(alpha = 0.1f), RoundedCornerShape(20.dp))
-                    .padding(4.dp),
+                modifier = Modifier.align(Alignment.CenterEnd),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Box(
+                // Mode Toggle
+                Row(
                     modifier = Modifier
-                        .background(
-                            if (trackingMode == TrackingMode.BODY) textLight else Color.Transparent,
-                            RoundedCornerShape(16.dp)
-                        )
-                        .clickable { if (!isRecording) { haptic.performHapticFeedback(HapticFeedbackType.LongPress); trackingMode = TrackingMode.BODY } }
-                        .padding(horizontal = 14.dp, vertical = 6.dp)
+                        .background(panelBg, RoundedCornerShape(20.dp))
+                        .border(1.dp, Color.White.copy(alpha = 0.05f), RoundedCornerShape(20.dp))
+                        .padding(4.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        "BODY",
-                        color = if (trackingMode == TrackingMode.BODY) bgDark else textLight.copy(alpha = 0.6f),
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold
+                    val bodyBg by androidx.compose.animation.animateColorAsState(
+                        targetValue = if (trackingMode == TrackingMode.BODY) textLight else Color.Transparent,
+                        animationSpec = androidx.compose.animation.core.spring(dampingRatio = 0.7f, stiffness = 400f)
                     )
-                }
-                Box(
-                    modifier = Modifier
-                        .background(
-                            if (trackingMode == TrackingMode.FACE) textLight else Color.Transparent,
-                            RoundedCornerShape(16.dp)
+                    val bodyTextColor by androidx.compose.animation.animateColorAsState(
+                        targetValue = if (trackingMode == TrackingMode.BODY) bgDark else textLight.copy(alpha = 0.6f)
+                    )
+                    val faceBg by androidx.compose.animation.animateColorAsState(
+                        targetValue = if (trackingMode == TrackingMode.FACE) textLight else Color.Transparent,
+                        animationSpec = androidx.compose.animation.core.spring(dampingRatio = 0.7f, stiffness = 400f)
+                    )
+                    val faceTextColor by androidx.compose.animation.animateColorAsState(
+                        targetValue = if (trackingMode == TrackingMode.FACE) bgDark else textLight.copy(alpha = 0.6f)
+                    )
+
+                    Box(
+                        modifier = Modifier
+                            .background(bodyBg, RoundedCornerShape(16.dp))
+                            .clickable { if (!isRecording) { haptic.performHapticFeedback(HapticFeedbackType.LongPress); trackingMode = TrackingMode.BODY } }
+                            .padding(horizontal = 14.dp, vertical = 6.dp)
+                    ) {
+                        Text(
+                            "BODY",
+                            color = bodyTextColor,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
                         )
-                        .clickable { if (!isRecording) { haptic.performHapticFeedback(HapticFeedbackType.LongPress); trackingMode = TrackingMode.FACE } }
-                        .padding(horizontal = 14.dp, vertical = 6.dp)
+                    }
+                    Box(
+                        modifier = Modifier
+                            .background(faceBg, RoundedCornerShape(16.dp))
+                            .clickable { if (!isRecording) { haptic.performHapticFeedback(HapticFeedbackType.LongPress); trackingMode = TrackingMode.FACE } }
+                            .padding(horizontal = 14.dp, vertical = 6.dp)
+                    ) {
+                        Text(
+                            "FACE",
+                            color = faceTextColor,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+                
+                Spacer(modifier = Modifier.width(8.dp))
+                
+                androidx.compose.material3.IconButton(
+                    onClick = { isGhostMode = !isGhostMode },
+                    modifier = Modifier.size(40.dp).background(if(isGhostMode) Color.Green else Color.Black.copy(alpha = 0.5f), CircleShape)
                 ) {
-                    Text(
-                        "FACE",
-                        color = if (trackingMode == TrackingMode.FACE) bgDark else textLight.copy(alpha = 0.6f),
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold
+                    Icon(
+                        imageVector = if(isGhostMode) Icons.Default.VisibilityOff else Icons.Default.Visibility, 
+                        contentDescription = "Ghost Mode", 
+                        tint = if (isGhostMode) Color.Black else Color.White,
+                        modifier = Modifier.size(20.dp)
                     )
                 }
             }
@@ -592,80 +740,22 @@ fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, 
             else -> 4f
         }
         
+        val viewportBorderModifier = if (trackingState == TrackingState.RECORDING) {
+            Modifier.border(width = 3.dp, color = PrimaryWhite, shape = RoundedCornerShape(24.dp))
+        } else if (trackingState == TrackingState.CALIBRATING) {
+            Modifier.border(width = (4f * pulseAlpha).dp, color = PrimaryWhite.copy(alpha=0.5f), shape = RoundedCornerShape(24.dp))
+        } else {
+            Modifier.border(width = 1.dp, color = GlassSurface, shape = RoundedCornerShape(24.dp))
+        }
+        
         Box(
             modifier = Modifier
                 .weight(1f)
                 .padding(horizontal = 16.dp)
+                .then(viewportBorderModifier)
                 .clip(RoundedCornerShape(24.dp))
-                .background(Color.Black)
-                .drawWithContent {
-                    drawContent()
-                    val stroke = trackerStroke
-                    
-                    if (trackingMode == TrackingMode.FACE) {
-                        val ovalWidth = size.width * 0.6f
-                        val ovalHeight = size.height * 0.5f
-                        val ovalLeft = (size.width - ovalWidth) / 2f
-                        val ovalTop = (size.height - ovalHeight) / 2f
-                        drawOval(
-                            color = trackerColor,
-                            topLeft = Offset(ovalLeft, ovalTop),
-                            size = androidx.compose.ui.geometry.Size(ovalWidth, ovalHeight),
-                            style = androidx.compose.ui.graphics.drawscope.Stroke(width = stroke)
-                        )
-                    } else {
-                        val bracketLength = 32.dp.toPx()
-                        // Top-Left
-                        drawLine(trackerColor, start = Offset(0f, 0f), end = Offset(bracketLength, 0f), strokeWidth = stroke)
-                        drawLine(trackerColor, start = Offset(0f, 0f), end = Offset(0f, bracketLength), strokeWidth = stroke)
-                        // Top-Right
-                        drawLine(trackerColor, start = Offset(this.size.width, 0f), end = Offset(this.size.width - bracketLength, 0f), strokeWidth = stroke)
-                        drawLine(trackerColor, start = Offset(this.size.width, 0f), end = Offset(this.size.width, bracketLength), strokeWidth = stroke)
-                        // Bottom-Left
-                        drawLine(trackerColor, start = Offset(0f, this.size.height), end = Offset(bracketLength, this.size.height), strokeWidth = stroke)
-                        drawLine(trackerColor, start = Offset(0f, this.size.height), end = Offset(0f, this.size.height - bracketLength), strokeWidth = stroke)
-                        // Bottom-Right
-                        drawLine(trackerColor, start = Offset(this.size.width, this.size.height), end = Offset(this.size.width - bracketLength, this.size.height), strokeWidth = stroke)
-                        drawLine(trackerColor, start = Offset(this.size.width, this.size.height), end = Offset(this.size.width, this.size.height - bracketLength), strokeWidth = stroke)
-                    }
-                }
         ) {
-            val view = androidx.compose.ui.platform.LocalView.current
-            var hasWindowFocus by remember { mutableStateOf(view.hasWindowFocus()) }
-            DisposableEffect(view) {
-                val listener = android.view.ViewTreeObserver.OnWindowFocusChangeListener { focus ->
-                    hasWindowFocus = focus
-                }
-                view.viewTreeObserver.addOnWindowFocusChangeListener(listener)
-                onDispose {
-                    view.viewTreeObserver.removeOnWindowFocusChangeListener(listener)
-                }
-            }
-            
-            val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
-            var isResumed by remember { mutableStateOf(lifecycleOwner.lifecycle.currentState == androidx.lifecycle.Lifecycle.State.RESUMED) }
-            DisposableEffect(lifecycleOwner) {
-                val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
-                    isResumed = event.targetState == androidx.lifecycle.Lifecycle.State.RESUMED
-                }
-                lifecycleOwner.lifecycle.addObserver(observer)
-                onDispose {
-                    lifecycleOwner.lifecycle.removeObserver(observer)
-                }
-            }
-
-            var isReadyToStartCamera by remember { mutableStateOf(false) }
-            LaunchedEffect(hasWindowFocus, isResumed) { 
-                if (hasWindowFocus && isResumed) {
-                    kotlinx.coroutines.delay(500) // Give Android time to flush AppOps states
-                    isReadyToStartCamera = true
-                } else {
-                    isReadyToStartCamera = false
-                }
-            }
-
-            if (isReadyToStartCamera) {
-                CameraPreviewAndAnalysis(
+            CameraPreviewAndAnalysis(
                     trackingMode = trackingMode,
                     isFlashActive = isFlashActive,
                     isGhostMode = isGhostMode,
@@ -704,18 +794,14 @@ fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, 
                         val rShoulder = pose.getPoseLandmark(PoseLandmark.RIGHT_SHOULDER)
                         if (lWrist != null && rWrist != null && lShoulder != null && rShoulder != null &&
                             lWrist.inFrameLikelihood > 0.5f && rWrist.inFrameLikelihood > 0.5f) {
-                            if (lWrist.position.x > rWrist.position.x &&
-                                Math.abs(lWrist.position.y - rWrist.position.y) < 100f &&
-                                lWrist.position.y < lShoulder.position.y + 100f) {
+                            if (xGestureEnabled &&
+                                lWrist.x < rWrist.x &&
+                                Math.abs(lWrist.y - rWrist.y) < 100f &&
+                                lWrist.y < lShoulder.y + 100f) {
                                 if (xGestureTime == 0L) xGestureTime = System.currentTimeMillis()
                                 else if (System.currentTimeMillis() - xGestureTime > 2000) {
-                                    toneGenerator?.startTone(ToneGenerator.TONE_CDMA_ABBR_ALERT, 500)
-                                    isRecording = false
-                                    trackingState = TrackingState.SEARCHING
-                                    val file = recorder.stopRecording()
-                                    lastSavedFile = file
-                                    currentDuration = 0L
-                                    showQualityScore = recorder.lastSessionStats
+                                    try { toneGenerator?.startTone(ToneGenerator.TONE_CDMA_ABBR_ALERT, 500) } catch (e: Exception) {}
+                                    stopActiveRecording()
                                     xGestureTime = 0L
                                 }
                             } else {
@@ -732,7 +818,7 @@ fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, 
                             trackingState = TrackingState.RECORDING // reusing an enum value? Wait, we didn't add RECORDING
                         } else {
                             if (trackingState != TrackingState.LOSS) {
-                                toneGenerator?.startTone(ToneGenerator.TONE_CDMA_ABBR_ALERT, 300)
+                                try { toneGenerator?.startTone(ToneGenerator.TONE_CDMA_ABBR_ALERT, 300) } catch (e: Exception) {}
                             }
                             trackingState = TrackingState.LOSS
                         }
@@ -747,16 +833,17 @@ fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, 
                                 } else if (isTPose) {
                                     trackingState = TrackingState.CALIBRATING
                                     calibrationTime = System.currentTimeMillis()
-                                    toneGenerator?.startTone(ToneGenerator.TONE_CDMA_EMERGENCY_RINGBACK, 200)
+                                    try { toneGenerator?.startTone(ToneGenerator.TONE_CDMA_EMERGENCY_RINGBACK, 200) } catch (e: Exception) {}
                                 }
                             }
                             TrackingState.CALIBRATING -> {
                                 if (!isTPose) {
                                     trackingState = TrackingState.READY
                                 } else {
+                                    recorder.accumulateCalibration(pose)
                                     if (System.currentTimeMillis() - calibrationTime > 1500) {
-                                        toneGenerator?.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 500)
-                                        recorder.calibrate(pose)
+                                        try { toneGenerator?.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 500) } catch (e: Exception) {}
+                                        recorder.finalizeCalibration()
                                         trackingState = TrackingState.READY
                                         triggerFlash = true
                                     }
@@ -769,6 +856,37 @@ fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, 
                     }
                 }
             )
+
+            androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
+                val stroke = trackerStroke
+                
+                if (trackingMode == TrackingMode.FACE) {
+                    val ovalWidth = size.width * 0.6f
+                    val ovalHeight = size.height * 0.5f
+                    val ovalLeft = (size.width - ovalWidth) / 2f
+                    val ovalTop = (size.height - ovalHeight) / 2f
+                    drawOval(
+                        color = trackerColor,
+                        topLeft = Offset(ovalLeft, ovalTop),
+                        size = androidx.compose.ui.geometry.Size(ovalWidth, ovalHeight),
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(width = stroke)
+                    )
+                } else {
+                    val bracketLength = 32.dp.toPx()
+                    // Top-Left
+                    drawLine(trackerColor, start = Offset(0f, 0f), end = Offset(bracketLength, 0f), strokeWidth = stroke)
+                    drawLine(trackerColor, start = Offset(0f, 0f), end = Offset(0f, bracketLength), strokeWidth = stroke)
+                    // Top-Right
+                    drawLine(trackerColor, start = Offset(this.size.width, 0f), end = Offset(this.size.width - bracketLength, 0f), strokeWidth = stroke)
+                    drawLine(trackerColor, start = Offset(this.size.width, 0f), end = Offset(this.size.width, bracketLength), strokeWidth = stroke)
+                    // Bottom-Left
+                    drawLine(trackerColor, start = Offset(0f, this.size.height), end = Offset(bracketLength, this.size.height), strokeWidth = stroke)
+                    drawLine(trackerColor, start = Offset(0f, this.size.height), end = Offset(0f, this.size.height - bracketLength), strokeWidth = stroke)
+                    // Bottom-Right
+                    drawLine(trackerColor, start = Offset(this.size.width, this.size.height), end = Offset(this.size.width - bracketLength, this.size.height), strokeWidth = stroke)
+                    drawLine(trackerColor, start = Offset(this.size.width, this.size.height), end = Offset(this.size.width, this.size.height - bracketLength), strokeWidth = stroke)
+                }
+
             }
 
             if (isGhostMode) {
@@ -786,13 +904,17 @@ fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, 
                 PoseOverlay(
                     pose = currentPose,
                     imageWidth = imageWidth,
-                    imageHeight = imageHeight
+                    imageHeight = imageHeight,
+                    isFrontCamera = isFrontCamera,
+                    modifier = Modifier.alpha(if (isGhostMode) 0.0f else 1f)
                 )
             } else {
                 FaceOverlay(
-                    faceMesh = currentFaceMesh,
+                    faceFrame = currentFaceMesh,
                     imageWidth = imageWidth,
-                    imageHeight = imageHeight
+                    imageHeight = imageHeight,
+                    isFrontCamera = true,
+                    modifier = Modifier.alpha(if (isGhostMode) 0.0f else 1f)
                 )
             }
 
@@ -843,7 +965,7 @@ fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, 
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(
                             text = when (trackingState) {
-                                TrackingState.SEARCHING -> "Step Back"
+                                TrackingState.SEARCHING -> if (trackingMode == TrackingMode.BODY) "Step Back" else "Looking for face..."
                                 else -> ""
                             },
                             color = Color.White,
@@ -854,11 +976,15 @@ fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, 
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
                             text = when (trackingState) {
-                                TrackingState.SEARCHING -> "Ensure full body is visible in frame"
+                                TrackingState.SEARCHING -> if (trackingMode == TrackingMode.FACE) 
+                                    "Position your face in the center of the frame." 
+                                else 
+                                    "Step back to capture full body."
                                 else -> ""
                             },
                             color = Color.White.copy(alpha = 0.8f),
-                            fontSize = 16.sp,
+                            fontSize = 14.sp,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
                             textAlign = TextAlign.Center
                         )
                     }
@@ -871,7 +997,7 @@ fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, 
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "TRACKING LOST\nPlease step back into frame",
+                        text = if (trackingMode == TrackingMode.BODY) "TRACKING LOST\nPlease step back into frame" else "TRACKING LOST\nPlease bring face back into frame",
                         color = Color.Red,
                         fontSize = 20.sp,
                         fontWeight = FontWeight.Bold,
@@ -884,6 +1010,27 @@ fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, 
             Box(modifier = Modifier.fillMaxSize()) {
                 // Top Left HUD
                 Column(modifier = Modifier.padding(16.dp).align(Alignment.TopStart)) {
+                    val confidenceColor = when {
+                        trackingConfidence > 0.75f -> Color(0xFF4ADE80)
+                        trackingConfidence > 0.4f -> Color(0xFFFBBF24)
+                        else -> Color(0xFFF87171)
+                    }
+                    Row(
+                        modifier = Modifier
+                            .background(panelBg, RoundedCornerShape(8.dp))
+                            .border(1.dp, Color.White.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "CONF: ${(trackingConfidence * 100).toInt()}%",
+                            color = confidenceColor,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+
                     androidx.compose.animation.AnimatedVisibility(visible = isRecording) {
                         val seconds = (currentDuration / 1000) % 60
                         val minutes = (currentDuration / 1000) / 60
@@ -937,24 +1084,6 @@ fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, 
                     }
                 }
 
-                // Top Right Settings
-                Row(
-                    modifier = Modifier.align(Alignment.TopEnd).padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    androidx.compose.material3.IconButton(
-                        onClick = { isGhostMode = !isGhostMode },
-                        modifier = Modifier.size(40.dp).background(if(isGhostMode) Color.Green else Color.Black.copy(alpha = 0.5f), CircleShape)
-                    ) {
-                        Icon(
-                            imageVector = if(isGhostMode) Icons.Default.VisibilityOff else Icons.Default.Visibility, 
-                            contentDescription = "Ghost Mode", 
-                            tint = if (isGhostMode) Color.Black else Color.White,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                }
-
                 if (countdownTimer > 0) {
                     Text(
                         "$countdownTimer",
@@ -974,11 +1103,18 @@ fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, 
                     }
                 }
 
+                val textShadow = androidx.compose.ui.graphics.Shadow(
+                    color = Color.Black,
+                    offset = androidx.compose.ui.geometry.Offset(2f, 2f),
+                    blurRadius = 4f
+                )
+
                 Column(
                     modifier = Modifier
                         .align(Alignment.BottomStart)
                         .padding(16.dp)
-                        .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
+                        .background(panelBg, RoundedCornerShape(8.dp))
+                        .border(1.dp, Color.White.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
                         .padding(horizontal = 12.dp, vertical = 8.dp)
                 ) {
                     Text(
@@ -986,21 +1122,24 @@ fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, 
                         color = Color.White,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
-                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        style = androidx.compose.ui.text.TextStyle(shadow = textShadow)
                     )
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
                         text = "BUFFER: ${String.format("%06d", bufferSize)}",
-                        color = Color.White.copy(alpha = 0.7f),
+                        color = Color.White.copy(alpha = 0.8f),
                         fontSize = 10.sp,
-                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        style = androidx.compose.ui.text.TextStyle(shadow = textShadow)
                     )
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
                         text = "MEM: ${memoryNum.value}MB | TEMP: 38°C",
-                        color = Color.White.copy(alpha = 0.7f),
+                        color = Color.White.copy(alpha = 0.8f),
                         fontSize = 10.sp,
-                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        style = androidx.compose.ui.text.TextStyle(shadow = textShadow)
                     )
                 }
             } // Close HUD Overlays Box
@@ -1008,13 +1147,20 @@ fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, 
 
         // Bottom Control Panel
         Column(modifier = Modifier.padding(24.dp)) {
-            Box(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 // Secondary Action Left (Library Shortcut)
+                val leftInteractionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                val leftIsPressed by leftInteractionSource.collectIsPressedAsState()
+                val leftScale by animateFloatAsState(targetValue = if (leftIsPressed) 0.85f else 1f, animationSpec = tween(durationMillis = 150))
+
                 IconButton(
                     onClick = { onNavigate(AppScreen.Library) },
-                    modifier = Modifier.size(56.dp).background(btnBg, RoundedCornerShape(16.dp)).align(Alignment.CenterStart)
+                    modifier = Modifier.size(56.dp).graphicsLayer { scaleX = leftScale; scaleY = leftScale }.background(btnBg, RoundedCornerShape(16.dp)),
+                    interactionSource = leftInteractionSource
                 ) {
                     Icon(imageVector = Icons.Default.Folder, contentDescription = "Library", tint = textLight)
                 }
@@ -1030,6 +1176,10 @@ fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, 
                     animationSpec = androidx.compose.animation.core.spring(dampingRatio = 0.6f, stiffness = 400f),
                     label = "buttonSize"
                 )
+                val interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                val isPressed by interactionSource.collectIsPressedAsState()
+                val scale by animateFloatAsState(targetValue = if (isPressed) 0.85f else 1f, animationSpec = tween(durationMillis = 150))
+                
                 val glowRadius by androidx.compose.animation.core.animateFloatAsState(
                     targetValue = if (isRecording) 24f else 0f,
                     animationSpec = androidx.compose.animation.core.tween(500),
@@ -1039,20 +1189,25 @@ fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, 
                 Box(
                     modifier = Modifier
                         .size(80.dp)
+                        .graphicsLayer {
+                            scaleX = scale
+                            scaleY = scale
+                        }
                         .border(4.dp, if (isRecording) recordRed else btnBg, CircleShape)
                         .padding(4.dp)
-                        .align(Alignment.Center)
-                        .clickable {
+                        // .align(Alignment.Center) <-- removed align
+                        .clickable(interactionSource = interactionSource, indication = null) {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             if (isRecording) {
-                                isRecording = false
-                                trackingState = TrackingState.SEARCHING
-                                lastSavedFile = recorder.stopRecording()
-                                showQualityScore = recorder.lastSessionStats
+                                stopActiveRecording()
                             } else if (countdownTimer > 0) {
                                 countdownTimer = 0 // Cancel countdown
                             } else {
-                                countdownTimer = 5 // Start countdown
+                                if (countdownSetting == 0) {
+                                    startActiveRecording()
+                                } else {
+                                    countdownTimer = countdownSetting // Start countdown
+                                }
                             }
                         },
                     contentAlignment = Alignment.Center
@@ -1079,34 +1234,20 @@ fun MoCapScreen(modifier: Modifier = Modifier, onNavigate: (AppScreen) -> Unit, 
                     )
                 }
 
-                // Secondary Action Right (Confidence)
-                val confidenceColor = when {
-                    trackingConfidence > 0.75f -> Color(0xFF4ADE80)
-                    trackingConfidence > 0.4f -> Color(0xFFFBBF24)
-                    else -> Color(0xFFF87171)
-                }
-                Box(
-                    modifier = Modifier
-                        .size(56.dp)
-                        .background(btnBg, RoundedCornerShape(16.dp))
-                        .align(Alignment.CenterEnd),
-                    contentAlignment = Alignment.Center
+                // Secondary Action Right (Flip Camera)
+                val rightInteractionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                val rightIsPressed by rightInteractionSource.collectIsPressedAsState()
+                val rightScale by animateFloatAsState(targetValue = if (rightIsPressed) 0.85f else 1f, animationSpec = tween(durationMillis = 150))
+
+                IconButton(
+                    onClick = { 
+                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                        isFrontCamera = !isFrontCamera 
+                    },
+                    modifier = Modifier.size(56.dp).graphicsLayer { scaleX = rightScale; scaleY = rightScale }.background(btnBg, RoundedCornerShape(16.dp)),
+                    interactionSource = rightInteractionSource
                 ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            text = "${(trackingConfidence * 100).toInt()}%",
-                            color = confidenceColor,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = "CONF",
-                            color = textLight.copy(alpha = 0.6f),
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
+                    Icon(imageVector = Icons.Default.FlipCameraAndroid, contentDescription = "Flip Camera", tint = textLight)
                 }
             }
         }

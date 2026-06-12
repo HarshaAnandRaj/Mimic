@@ -1,0 +1,98 @@
+Starting a Gradle Daemon, 1 busy and 3 stopped Daemons could not be reused, use --status for details
+Calculating task graph as no cached configuration is available for tasks: :app:compileDebugKotlin
+> Task :app:preBuild UP-TO-DATE
+> Task :app:preDebugBuild UP-TO-DATE
+> Task :app:generateDebugResources UP-TO-DATE
+> Task :app:generateDebugBuildConfig UP-TO-DATE
+> Task :app:packageDebugResources UP-TO-DATE
+> Task :app:processDebugNavigationResources UP-TO-DATE
+> Task :app:parseDebugLocalResources UP-TO-DATE
+> Task :app:generateDebugRFile UP-TO-DATE
+> Task :app:kspDebugKotlin UP-TO-DATE
+
+> Task :app:compileDebugKotlin FAILED
+e: file:///app/applet/app/src/main/java/com/example/CameraPreviewAndAnalysis.kt:31:32 Unresolved reference 'facemesh'.
+e: file:///app/applet/app/src/main/java/com/example/CameraPreviewAndAnalysis.kt:32:32 Unresolved reference 'facemesh'.
+e: file:///app/applet/app/src/main/java/com/example/CameraPreviewAndAnalysis.kt:33:32 Unresolved reference 'facemesh'.
+e: file:///app/applet/app/src/main/java/com/example/FaceMath.kt:3:32 Unresolved reference 'facemesh'.
+e: file:///app/applet/app/src/main/java/com/example/FaceMath.kt:12:22 Unresolved reference 'FaceMeshPoint'.
+e: file:///app/applet/app/src/main/java/com/example/FaceMath.kt:12:41 Unresolved reference 'FaceMeshPoint'.
+e: file:///app/applet/app/src/main/java/com/example/FaceMath.kt:13:21 Unresolved reference 'position'.
+e: file:///app/applet/app/src/main/java/com/example/FaceMath.kt:13:37 Unresolved reference 'position'.
+e: file:///app/applet/app/src/main/java/com/example/FaceMath.kt:14:21 Unresolved reference 'position'.
+e: file:///app/applet/app/src/main/java/com/example/FaceMath.kt:14:37 Unresolved reference 'position'.
+e: file:///app/applet/app/src/main/java/com/example/FaceMath.kt:15:21 Unresolved reference 'position'.
+e: file:///app/applet/app/src/main/java/com/example/FaceMath.kt:15:37 Unresolved reference 'position'.
+e: file:///app/applet/app/src/main/java/com/example/FaceMath.kt:16:16 Return type mismatch: expected 'Float', actual 'Double'.
+e: file:///app/applet/app/src/main/java/com/example/FaceMath.kt:19:40 Unresolved reference 'FaceMeshPoint'.
+e: file:///app/applet/app/src/main/java/com/example/FaceMath.kt:21:20 Cannot infer type for this parameter. Specify it explicitly.
+e: file:///app/applet/app/src/main/java/com/example/FaceMath.kt:21:20 Unresolved reference. None of the following candidates is applicable because of a receiver type mismatch:
+fun <T> Array<out T>.isEmpty(): Boolean
+e: file:///app/applet/app/src/main/java/com/example/FaceMath.kt:69:35 Unresolved reference 'position'.
+e: file:///app/applet/app/src/main/java/com/example/FaceMath.kt:69:53 Unresolved reference 'position'.
+e: file:///app/applet/app/src/main/java/com/example/FaceMath.kt:70:33 Unresolved reference 'position'.
+e: file:///app/applet/app/src/main/java/com/example/FaceMath.kt:79:37 Unresolved reference 'FaceMeshPoint'.
+e: file:///app/applet/app/src/main/java/com/example/FaceMath.kt:81:20 Cannot infer type for this parameter. Specify it explicitly.
+e: file:///app/applet/app/src/main/java/com/example/FaceMath.kt:81:20 Unresolved reference. None of the following candidates is applicable because of a receiver type mismatch:
+fun <T> Array<out T>.isEmpty(): Boolean
+e: file:///app/applet/app/src/main/java/com/example/FaceMath.kt:94:22 Unresolved reference 'position'.
+e: file:///app/applet/app/src/main/java/com/example/FaceMath.kt:95:22 Unresolved reference 'position'.
+e: file:///app/applet/app/src/main/java/com/example/FaceMath.kt:96:22 Unresolved reference 'position'.
+e: file:///app/applet/app/src/main/java/com/example/FaceMath.kt:100:27 Unresolved reference 'position'.
+e: file:///app/applet/app/src/main/java/com/example/FaceMath.kt:100:45 Unresolved reference 'position'.
+e: file:///app/applet/app/src/main/java/com/example/FaceMath.kt:101:27 Unresolved reference 'position'.
+e: file:///app/applet/app/src/main/java/com/example/FaceMath.kt:101:45 Unresolved reference 'position'.
+e: file:///app/applet/app/src/main/java/com/example/FaceMath.kt:102:27 Unresolved reference 'position'.
+e: file:///app/applet/app/src/main/java/com/example/FaceMath.kt:102:45 Unresolved reference 'position'.
+e: file:///app/applet/app/src/main/java/com/example/FaceMath.kt:105:27 Unresolved reference 'position'.
+e: file:///app/applet/app/src/main/java/com/example/FaceMath.kt:105:48 Unresolved reference 'position'.
+e: file:///app/applet/app/src/main/java/com/example/FaceMath.kt:106:27 Unresolved reference 'position'.
+e: file:///app/applet/app/src/main/java/com/example/FaceMath.kt:106:48 Unresolved reference 'position'.
+e: file:///app/applet/app/src/main/java/com/example/FaceMath.kt:107:27 Unresolved reference 'position'.
+e: file:///app/applet/app/src/main/java/com/example/FaceMath.kt:107:48 Unresolved reference 'position'.
+e: file:///app/applet/app/src/main/java/com/example/FaceMath.kt:129:36 Unresolved reference 'FaceMeshPoint'.
+e: file:///app/applet/app/src/main/java/com/example/FaceRecorder.kt:4:32 Unresolved reference 'facemesh'.
+e: file:///app/applet/app/src/main/java/com/example/FaceRecorder.kt:82:31 Unresolved reference 'FaceMesh'.
+e: file:///app/applet/app/src/main/java/com/example/FaceRecorder.kt:95:38 Unresolved reference 'allPoints'.
+e: file:///app/applet/app/src/main/java/com/example/FaceRecorder.kt:98:62 Unresolved reference 'facemesh'.
+e: file:///app/applet/app/src/main/java/com/example/FaceRecorder.kt:98:87 Argument type mismatch: actual type is 'Int', but 'Int' was expected.
+e: file:///app/applet/app/src/main/java/com/example/FaceRecorder.kt:98:92 Argument type mismatch: actual type is 'Function1<Int, Nothing?>', but 'Function1<Int, uninferred T (of class Array<T>)>' was expected.
+e: file:///app/applet/app/src/main/java/com/example/FaceRecorder.kt:99:27 Method 'iterator()' is ambiguous for this expression. Applicable candidates:
+fun <T> Enumeration<T>.iterator(): Iterator<T>
+fun <T> Iterator<T>.iterator(): Iterator<T>
+fun <K, V> Map<out K, V>.iterator(): Iterator<Map.Entry<K, V>>
+fun <K, V> MutableMap<K, V>.iterator(): MutableIterator<MutableMap.MutableEntry<K, V>>
+fun CharSequence.iterator(): CharIterator
+fun BufferedInputStream.iterator(): ByteIterator
+e: file:///app/applet/app/src/main/java/com/example/FaceRecorder.kt:106:40 Unresolved reference 'boundingBox'.
+e: file:///app/applet/app/src/main/java/com/example/FaceRecorder.kt:162:27 Method 'iterator()' is ambiguous for this expression. Applicable candidates:
+fun <T> Enumeration<T>.iterator(): Iterator<T>
+fun <T> Iterator<T>.iterator(): Iterator<T>
+fun <K, V> Map<out K, V>.iterator(): Iterator<Map.Entry<K, V>>
+fun <K, V> MutableMap<K, V>.iterator(): MutableIterator<MutableMap.MutableEntry<K, V>>
+fun CharSequence.iterator(): CharIterator
+fun BufferedInputStream.iterator(): ByteIterator
+e: file:///app/applet/app/src/main/java/com/example/MainActivity.kt:648:38 Overload resolution ambiguity between candidates:
+fun recordFrame(faceMesh: <ERROR TYPE REF: Symbol not found for FaceMesh>): Unit
+fun recordFrame(faceFrame: FaceTrackingFrame): Unit
+e: file:///app/applet/app/src/main/java/com/example/MediaPipeFaceTracker.kt:69:11 Unresolved reference 'categories'.
+e: file:///app/applet/app/src/main/java/com/example/MediaPipeFaceTracker.kt:72:22 Unresolved reference 'categoryName'.
+e: file:///app/applet/app/src/main/java/com/example/MediaPipeFaceTracker.kt:72:73 Unresolved reference 'score'.
+e: file:///app/applet/app/src/main/java/com/example/MediaPipeFaceTracker.kt:79:84 Unresolved reference 'data'.
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':app:compileDebugKotlin'.
+> A failure occurred while executing org.jetbrains.kotlin.compilerRunner.GradleCompilerRunnerWithWorkers$GradleKotlinCompilerWorkAction
+   > Compilation error. See log for more details
+
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights from a Build Scan (powered by Develocity).
+> Get more help at https://help.gradle.org.
+
+BUILD FAILED in 55s
+8 actionable tasks: 1 executed, 7 up-to-date
+Configuration cache entry stored.

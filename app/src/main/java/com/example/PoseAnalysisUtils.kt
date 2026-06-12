@@ -1,10 +1,9 @@
 package com.example
 
-import com.google.mlkit.vision.pose.Pose
 import com.google.mlkit.vision.pose.PoseLandmark
 import kotlin.math.abs
 
-fun analyzeFullBodyVisibility(pose: Pose?): Boolean {
+fun analyzeFullBodyVisibility(pose: SmoothedPose?): Boolean {
     if (pose == null || pose.allPoseLandmarks.isEmpty()) return false
 
     // We consider it full body if we can see shoulders, hips, and ankles with decent confidence.
@@ -21,7 +20,7 @@ fun analyzeFullBodyVisibility(pose: Pose?): Boolean {
     return true
 }
 
-fun analyzeTPose(pose: Pose?): Boolean {
+fun analyzeTPose(pose: SmoothedPose?): Boolean {
     if (pose == null) return false
 
     val leftShoulder = pose.getPoseLandmark(PoseLandmark.LEFT_SHOULDER) ?: return false
@@ -30,10 +29,10 @@ fun analyzeTPose(pose: Pose?): Boolean {
     val rightWrist = pose.getPoseLandmark(PoseLandmark.RIGHT_WRIST) ?: return false
 
     // Check if wrists are roughly at shoulder height
-    val shoulderY = (leftShoulder.position.y + rightShoulder.position.y) / 2
+    val shoulderY = (leftShoulder.y + rightShoulder.y) / 2
     
-    val leftWristDiffY = abs(leftWrist.position.y - leftShoulder.position.y)
-    val rightWristDiffY = abs(rightWrist.position.y - rightShoulder.position.y)
+    val leftWristDiffY = abs(leftWrist.y - leftShoulder.y)
+    val rightWristDiffY = abs(rightWrist.y - rightShoulder.y)
 
     // Rough check: wrist shouldn't be much higher or lower than shoulder
     // Assuming image height is around 480 or 640, a threshold of 40-50 pixels is reasonable
@@ -44,8 +43,8 @@ fun analyzeTPose(pose: Pose?): Boolean {
     }
     
     // Check if wrists are out wide (x distance)
-    val shoulderDist = abs(leftShoulder.position.x - rightShoulder.position.x)
-    val wristDist = abs(leftWrist.position.x - rightWrist.position.x)
+    val shoulderDist = abs(leftShoulder.x - rightShoulder.x)
+    val wristDist = abs(leftWrist.x - rightWrist.x)
     
     // In T pose, wrist distance should be significantly larger than shoulder width
     if (wristDist < shoulderDist * 2.0f) {
@@ -55,7 +54,7 @@ fun analyzeTPose(pose: Pose?): Boolean {
     return true
 }
 
-fun getAverageConfidence(pose: Pose?): Float {
+fun getAverageConfidence(pose: SmoothedPose?): Float {
     if (pose == null || pose.allPoseLandmarks.isEmpty()) return 0f
     var sum = 0f
     for (l in pose.allPoseLandmarks) {

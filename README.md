@@ -21,7 +21,12 @@ Mimic is an Android-native motion capture application that records human body mo
 *   **Anatomical Hinge Clamping:** Hard biological rule enforcement via dot-product analysis to prevent impossible backward bends in hinge joints like elbows and knees.
 *   **Absolute Floor Penetration Guard:** Dynamically locks vertical axis thresholds based on ground floor ankle states during calibration to forbid any tracking coordinate from sinking "underground".
 *   **Kalman Filter Temporal Smoothing:** An aerospace-grade predictive algorithm that out-performs simple EMA by balancing measurement confidence and projected velocity to eliminate jitter without inducing tracker lag.
-*   **Occlusion Fallback (Dead-Reckoning):** A safety algorithm triggered by drops in tracking confidence that intuitively interpolates hidden joints to natural resting positions.
+*   **FilterRlAgent (Reinforcement Learning):** Dynamically adjusts the One-Euro filter's beta and cutoff using an onboard Q-Learning algorithm. It optimizes tracking by increasing responsiveness during high-speed actions (like a punch) and aggressively smoothing during slow, steady movements.
+*   **Accidental App Exit Protection:** Intelligent BackHandler traps accidental swipe-backs during a live capture session, stopping the session and safely saving the data instead of abruptly crashing.
+*   **Zero-Storage Leak Engine:** Automatically hunts for orphaned `.bvh` or `.csv` files linked to a raw capture `.json` and removes them seamlessly during the user deletion process, keeping the device's storage clean.
+*   **FileProvider Cache Export:** Advanced permission configurations allow dynamic generation and direct secure sharing of converted `.bvh` and animation data directly from the private cache, seamlessly integrating into external apps without filesystem permissions blocking the transfer.
+*   **Toggleable Gesture Controls:** Configurable settings to toggle remote motion triggers (like the Cross-Arm "Stop" gesture) allowing actors to T-Pose or perform naturally without prematurely ending their sessions.
+*   **Native BVH Export:** Currently, the app exports structured JSON payload. A local builder compiles this JSON into a standard Biovision Hierarchy (`.bvh`) skeleton file on-device cleanly through the Export Menu.
 
 ## 🔜 Yet to be Added (Planned Features)
 
@@ -29,7 +34,6 @@ While the core tracking and architecture is incredibly robust, the following fea
 
 *   **Subject Locking (ROI Photobomb Rejector):** Bounding box isolation to prevent the tracker from snapping to background individuals during a session.
 *   **Probabilistic Preflight & Quality Swapping:** Dynamically shifting the camera resolution between 1080p and 480p based on thermal and memory survival indexing.
-*   **Native BVH Export:** Currently, the app exports structured JSON payload. A local builder to compile this JSON into standard Biovision Hierarchy (`.bvh`) skeleton files on-device is planned.
 
 ## Privacy & Safety 🔒
 

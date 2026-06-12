@@ -1,7 +1,6 @@
 package com.example
 
 import android.content.Context
-import com.google.mlkit.vision.facemesh.FaceMesh
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedWriter
@@ -20,9 +19,19 @@ class FaceRecorder(private val context: Context) {
     // Ultimate Upgrades
     private val vmcSender = VmcOscSender()
     var audioAnalyzer: AudioVisemeAnalyzer? = null
+    
+    private val processor = FaceBlendshapeProcessor()
+    private val calibrationSamples = mutableListOf<Map<String, Float>>()
+    private val CALIBRATION_FRAMES = 30
+    private var isCalibrated = false
 
-    fun startRecording() {
+    fun startRecording(imageWidth: Int, imageHeight: Int, isFrontCamera: Boolean) {
+        val prefs = context.getSharedPreferences("mocap_prefs", Context.MODE_PRIVATE)
+        vmcSender.targetIp = prefs.getString("osc_ip", "192.168.1.100") ?: "192.168.1.100"
+        
         frameCount = 0
+        calibrationSamples.clear()
+        isCalibrated = false
         audioAnalyzer?.start()
         
         try {
@@ -38,6 +47,9 @@ class FaceRecorder(private val context: Context) {
             jsonWriter?.beginObject()
             jsonWriter?.name("type")?.value("metadata")
             jsonWriter?.name("tracking_mode")?.value("FACE")
+            jsonWriter?.name("image_width")?.value(imageWidth)
+            jsonWriter?.name("image_height")?.value(imageHeight)
+            jsonWriter?.name("is_front_camera")?.value(isFrontCamera)
             jsonWriter?.endObject()
             
         } catch (e: Exception) {
@@ -58,6 +70,7 @@ class FaceRecorder(private val context: Context) {
             try {
                 jsonWriter?.close()
                 jsonWriter = null
+                currentFile?.delete()
             } catch (ignored: Exception) {}
             return null
         }
@@ -73,7 +86,7 @@ class FaceRecorder(private val context: Context) {
         }
     }
 
-    fun recordFrame(faceMesh: FaceMesh) {
+    fun recordFrame(faceFrame: FaceTrackingFrame) {
         if (!isRecording) return
 
         val currentTime = System.currentTimeMillis()
@@ -85,31 +98,31 @@ class FaceRecorder(private val context: Context) {
             jsonWriter?.name("frame")?.value(frameCount)
             jsonWriter?.name("timestamp")?.value(timestamp)
             jsonWriter?.name("timestamp_utc")?.value(timestampUtc)
+
+            // Add Visemes from Audio
+            val baseAudioShapes = faceFrame.blendshapes.toMutableMap()
+            if (audioAnalyzer != null) {
+                baseAudioShapes["JawOpen"] = Math.max(baseAudioShapes["JawOpen"] ?: 0f, audioAnalyzer!!.visemeA.value)
+                baseAudioShapes["MouthPucker"] = Math.max(baseAudioShapes["MouthPucker"] ?: 0f, audioAnalyzer!!.visemeO.value)
+            }
             
-            val rawPoints = faceMesh.allPoints
-            // The raw face mesh output points have point.index values. Wait, some could be out of bounds if size is small.
-            // But we know indices can be up to 477.
-            val mappedPoints = Array<com.google.mlkit.vision.facemesh.FaceMeshPoint?>(478) { null }
-            for (point in rawPoints) {
-                if (point.index in 0..477) {
-                    mappedPoints[point.index] = point
+            // Neutral Calibration
+            if (!isCalibrated) {
+                calibrationSamples.add(baseAudioShapes)
+                if (calibrationSamples.size >= CALIBRATION_FRAMES) {
+                    processor.setNeutral(calibrationSamples)
+                    isCalibrated = true
                 }
             }
             
-            // 1. ARKit Blendshapes
-            val boundingBox = faceMesh.boundingBox
-            val faceWidth = boundingBox.width().toFloat()
-            val faceHeight = boundingBox.height().toFloat()
+            // Process and Smooth Blendshapes (if calibrated it removes neutral, applies custom smoothing)
+            val blendedAudioShapes = processor.process(baseAudioShapes, faceFrame.timestampMs).toMutableMap()
             
-            val blendshapes = FaceMath.solveBlendshapes(mappedPoints, faceWidth, faceHeight)
-            val gaze = FaceMath.solveEyeGaze(mappedPoints)
-            
-            // Add Visemes from Audio
-            val blendedAudioShapes = blendshapes.toMutableMap()
-            blendedAudioShapes.putAll(gaze)
-            if (audioAnalyzer != null) {
-                blendedAudioShapes["JawOpen"] = Math.max(blendedAudioShapes["JawOpen"] ?: 0f, audioAnalyzer!!.visemeA.value)
-                blendedAudioShapes["MouthPucker"] = audioAnalyzer!!.visemeO.value
+            // Conflict cleanup
+            val jawOpen = blendedAudioShapes["JawOpen"] ?: 0f
+            if (jawOpen > 0.5f) {
+                blendedAudioShapes["MouthClose"] = 0f
+                blendedAudioShapes["MouthRollIn"] = (blendedAudioShapes["MouthRollIn"] ?: 0f) * 0.2f
             }
 
             // Write Blendshapes
@@ -120,8 +133,45 @@ class FaceRecorder(private val context: Context) {
             }
             jsonWriter?.endObject()
 
-            // 2. Head Pose
-            val headPose = FaceMath.solveHeadPose(mappedPoints)
+            // 2. Head Pose from transform matrix if available, otherwise default
+            // Matrix to quaternion logic could be added here, but for now we skip or write zeros/defaults
+            // MediaPipe matrix is 4x4 flattened (16 floats)
+            val headPose = FloatArray(7) { 0f }
+            val m = faceFrame.transformMatrix
+            if (m != null && m.size == 16) {
+                headPose[0] = m[12] // tx
+                headPose[1] = m[13] // ty
+                headPose[2] = m[14] // tz
+                
+                // Rotation (extract approx quaternion from matrix)
+                val tr = m[0] + m[5] + m[10]
+                if (tr > 0f) {
+                    val S = Math.sqrt(tr.toDouble() + 1.0).toFloat() * 2f
+                    headPose[6] = 0.25f * S // w
+                    headPose[3] = (m[6] - m[9]) / S // x
+                    headPose[4] = (m[8] - m[2]) / S // y
+                    headPose[5] = (m[1] - m[4]) / S // z
+                } else if ((m[0] > m[5]) && (m[0] > m[10])) {
+                    val S = Math.sqrt(1.0 + m[0] - m[5] - m[10]).toFloat() * 2f
+                    headPose[6] = (m[6] - m[9]) / S // w
+                    headPose[3] = 0.25f * S // x
+                    headPose[4] = (m[1] + m[4]) / S // y
+                    headPose[5] = (m[8] + m[2]) / S // z
+                } else if (m[5] > m[10]) {
+                    val S = Math.sqrt(1.0 + m[5] - m[0] - m[10]).toFloat() * 2f
+                    headPose[6] = (m[8] - m[2]) / S // w
+                    headPose[3] = (m[1] + m[4]) / S // x
+                    headPose[4] = 0.25f * S // y
+                    headPose[5] = (m[6] + m[9]) / S // z
+                } else {
+                    val S = Math.sqrt(1.0 + m[10] - m[0] - m[5]).toFloat() * 2f
+                    headPose[6] = (m[1] - m[4]) / S // w
+                    headPose[3] = (m[8] + m[2]) / S // x
+                    headPose[4] = (m[6] + m[9]) / S // y
+                    headPose[5] = 0.25f * S // z
+                }
+            }
+
             jsonWriter?.name("head_pose")
             jsonWriter?.beginArray()
             for (v in headPose) {
@@ -136,15 +186,12 @@ class FaceRecorder(private val context: Context) {
             jsonWriter?.name("landmarks")
             jsonWriter?.beginArray()
             
-            for (point in rawPoints) {
-                val pointIndex = point.index
-                val position = point.position
-                
+            for (point in faceFrame.landmarks) {
                 jsonWriter?.beginObject()
-                jsonWriter?.name("id")?.value(pointIndex)
-                jsonWriter?.name("x")?.value(position.x)
-                jsonWriter?.name("y")?.value(position.y)
-                jsonWriter?.name("z")?.value(position.z)
+                jsonWriter?.name("id")?.value(point.id)
+                jsonWriter?.name("x")?.value(point.x)
+                jsonWriter?.name("y")?.value(point.y)
+                jsonWriter?.name("z")?.value(point.z)
                 jsonWriter?.name("visibility")?.value(1.0)
                 jsonWriter?.endObject()
             }
@@ -153,6 +200,9 @@ class FaceRecorder(private val context: Context) {
             jsonWriter?.endObject()
         } catch (e: Exception) {
             e.printStackTrace()
+            isRecording = false
+            try { jsonWriter?.close() } catch (ignored: Exception) {}
+            jsonWriter = null
         }
         
         frameCount++
@@ -160,4 +210,10 @@ class FaceRecorder(private val context: Context) {
 
     fun isRecording() = isRecording
     fun getBufferLength() = frameCount
+
+    fun close() {
+        if (isRecording) stopRecording()
+        audioAnalyzer?.stop()
+        vmcSender.close()
+    }
 }
